@@ -133,7 +133,15 @@ function Board() {
                   const used = usedCapacity(c.id, demands);
                   const free = 100 - used;
                   return (
-                    <div key={c.id} className="rounded-xl border bg-card p-3">
+                    <div
+                      key={c.id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/consultant-id", c.id);
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
+                      className="cursor-grab rounded-xl border bg-card p-3 active:cursor-grabbing hover:border-primary/40 hover:shadow-sm"
+                    >
                       <div className="flex items-start gap-3">
                         <Avatar consultant={c} />
                         <div className="min-w-0 flex-1">
