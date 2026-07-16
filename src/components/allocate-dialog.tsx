@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -28,7 +28,7 @@ export function AllocateDialog({ demandId, open, onOpenChange, preselectConsulta
   const selected = consultants.find((c) => c.id === selectedId);
   const currentAlloc = demand?.allocations.find((a) => a.consultantId === selectedId);
 
-  useMemo(() => {
+  useEffect(() => {
     setSelectedId(preselectConsultantId);
     setCapacity(
       preselectConsultantId
