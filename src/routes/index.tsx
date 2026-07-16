@@ -133,7 +133,15 @@ function Board() {
                   const used = usedCapacity(c.id, demands);
                   const free = 100 - used;
                   return (
-                    <div key={c.id} className="rounded-xl border bg-card p-3">
+                    <div
+                      key={c.id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/consultant-id", c.id);
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
+                      className="cursor-grab rounded-xl border bg-card p-3 active:cursor-grabbing hover:border-primary/40 hover:shadow-sm"
+                    >
                       <div className="flex items-start gap-3">
                         <Avatar consultant={c} />
                         <div className="min-w-0 flex-1">
@@ -246,8 +254,34 @@ function DemandCard({
 }) {
   const Icon = typeIcon[demand.type];
   const totalAllocated = demand.allocations.reduce((s, a) => s + a.capacity, 0);
+  const [dragOver, setDragOver] = useState(false);
   return (
-    <div className="group flex flex-col rounded-xl border bg-card p-4 transition hover:shadow-md">
+    <div
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("text/consultant-id")) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          if (!dragOver) setDragOver(true);
+        }
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const consultantId = e.dataTransfer.getData("text/consultant-id");
+        if (!consultantId) return;
+        const existing = demand.allocations.find((a) => a.consultantId === consultantId);
+        if (existing) {
+          onAllocate(consultantId);
+          return;
+        }
+        actions.allocate(demand.id, consultantId, 25);
+      }}
+      className={
+        "group flex flex-col rounded-xl border bg-card p-4 transition hover:shadow-md " +
+        (dragOver ? "border-primary ring-2 ring-primary/30 bg-primary/5" : "")
+      }
+    >
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className={"inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide " + statusStyles[demand.status]}>

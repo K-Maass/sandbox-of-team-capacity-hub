@@ -1,11 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Users } from "lucide-react";
+import { BarChart3, LayoutDashboard, Users } from "lucide-react";
 
 export function AppHeader() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const links = [
     { to: "/", label: "Board", icon: LayoutDashboard },
     { to: "/consultants", label: "Consultants", icon: Users },
+    { to: "/analytics", label: "Analytics", icon: BarChart3 },
   ];
   return (
     <header className="sticky top-0 z-20 border-b bg-surface/80 backdrop-blur">
