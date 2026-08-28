@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ConsultantsRouteImport } from './routes/consultants'
 import { Route as AnalyticsRouteImport } from './routes/analytics'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiPublicExportZipRouteImport } from './routes/api/public/export/zip'
 
 const ConsultantsRoute = ConsultantsRouteImport.update({
   id: '/consultants',
@@ -28,35 +29,49 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicExportZipRoute = ApiPublicExportZipRouteImport.update({
+  id: '/api/public/export/zip',
+  path: '/api/public/export/zip',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/analytics': typeof AnalyticsRoute
   '/consultants': typeof ConsultantsRoute
+  '/api/public/export/zip': typeof ApiPublicExportZipRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/analytics': typeof AnalyticsRoute
   '/consultants': typeof ConsultantsRoute
+  '/api/public/export/zip': typeof ApiPublicExportZipRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/analytics': typeof AnalyticsRoute
   '/consultants': typeof ConsultantsRoute
+  '/api/public/export/zip': typeof ApiPublicExportZipRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/analytics' | '/consultants'
+  fullPaths: '/' | '/analytics' | '/consultants' | '/api/public/export/zip'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/analytics' | '/consultants'
-  id: '__root__' | '/' | '/analytics' | '/consultants'
+  to: '/' | '/analytics' | '/consultants' | '/api/public/export/zip'
+  id:
+    | '__root__'
+    | '/'
+    | '/analytics'
+    | '/consultants'
+    | '/api/public/export/zip'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AnalyticsRoute: typeof AnalyticsRoute
   ConsultantsRoute: typeof ConsultantsRoute
+  ApiPublicExportZipRoute: typeof ApiPublicExportZipRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -82,6 +97,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/export/zip': {
+      id: '/api/public/export/zip'
+      path: '/api/public/export/zip'
+      fullPath: '/api/public/export/zip'
+      preLoaderRoute: typeof ApiPublicExportZipRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -89,6 +111,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AnalyticsRoute: AnalyticsRoute,
   ConsultantsRoute: ConsultantsRoute,
+  ApiPublicExportZipRoute: ApiPublicExportZipRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
