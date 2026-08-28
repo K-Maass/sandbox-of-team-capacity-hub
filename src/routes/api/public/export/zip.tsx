@@ -23,6 +23,7 @@ const EXCLUDED_FILES = new Set([
   ".DS_Store",
   "tsconfig.tsbuildinfo",
   "AGENTS.md",
+  ".git",
 ]);
 
 const EXCLUDED_FILE_PATTERNS = [/^\.env/, /\.log$/, /\.local$/];
@@ -61,8 +62,9 @@ export const Route = createFileRoute("/api/public/export/zip")({
           await addDirectory(zip, root, root);
 
           const bytes = await zip.generateAsync({ type: "uint8array" });
+          const blob = new Blob([bytes], { type: "application/zip" });
 
-          return new Response(bytes, {
+          return new Response(blob, {
             headers: {
               "Content-Type": "application/zip",
               "Content-Disposition": 'attachment; filename="capacity-board.zip"',
