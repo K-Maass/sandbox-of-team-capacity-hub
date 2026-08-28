@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { BarChart3, LayoutDashboard, Users } from "lucide-react";
+import { BarChart3, Download, LayoutDashboard, Users } from "lucide-react";
 
 export function AppHeader() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -37,6 +37,16 @@ export function AppHeader() {
             );
           })}
         </nav>
+        <div className="ml-auto flex items-center gap-2">
+          <a
+            href="/api/public/export/zip"
+            download
+            className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Export ZIP</span>
+          </a>
+        </div>
       </div>
     </header>
   );
