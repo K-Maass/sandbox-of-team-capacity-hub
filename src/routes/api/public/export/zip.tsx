@@ -61,10 +61,9 @@ export const Route = createFileRoute("/api/public/export/zip")({
           const zip = new JSZip();
           await addDirectory(zip, root, root);
 
-          const bytes = await zip.generateAsync({ type: "uint8array" });
-          const blob = new Blob([bytes], { type: "application/zip" });
+          const buffer = await zip.generateAsync({ type: "arraybuffer" });
 
-          return new Response(blob, {
+          return new Response(buffer, {
             headers: {
               "Content-Type": "application/zip",
               "Content-Disposition": 'attachment; filename="capacity-board.zip"',
