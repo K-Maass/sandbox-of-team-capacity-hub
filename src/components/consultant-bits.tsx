@@ -1,4 +1,4 @@
-import { Consultant, Level } from "@/lib/store";
+import type { Consultant, Level } from "@/lib/types";
 
 const levelColor: Record<Level, string> = {
   Junior: "bg-info/15 text-info",
@@ -51,11 +51,12 @@ export function LevelBadge({ level }: { level: Level }) {
   );
 }
 
-export function CapacityBar({ used }: { used: number }) {
-  const pct = Math.min(used, 100);
-  const over = used > 100;
+export function CapacityBar({ used, max = 100 }: { used: number; max?: number }) {
+  const pct = max > 0 ? Math.min((used / max) * 100, 100) : 0;
+  const over = used > max;
+  const ratio = max > 0 ? (used / max) * 100 : 0;
   const color =
-    over ? "bg-destructive" : used >= 85 ? "bg-warning" : used >= 40 ? "bg-info" : "bg-success";
+    over ? "bg-destructive" : ratio >= 85 ? "bg-warning" : ratio >= 40 ? "bg-info" : "bg-success";
   return (
     <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
       <div className={`h-full ${color} transition-all`} style={{ width: `${pct}%` }} />
