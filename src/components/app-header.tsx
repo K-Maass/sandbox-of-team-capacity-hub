@@ -1,8 +1,9 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Download, LayoutDashboard, LogOut, UserCircle, Users } from "lucide-react";
+import { BarChart3, LayoutDashboard, LogOut, UserCircle, Users } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useSession } from "@/lib/auth";
+import { useCapacityRealtime } from "@/lib/data";
 import { Button } from "@/components/ui/button";
 
 export function AppHeader() {
@@ -10,11 +11,12 @@ export function AppHeader() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useSession();
+  useCapacityRealtime();
 
   const links = [
     { to: "/", label: "Board", icon: LayoutDashboard },
-    { to: "/consultants", label: "Consultants", icon: Users },
-    { to: "/analytics", label: "Analytics", icon: BarChart3 },
+    { to: "/consultants", label: "Team", icon: Users },
+    { to: "/analytics", label: "Insights", icon: BarChart3 },
     { to: "/profile", label: "My profile", icon: UserCircle },
   ];
 
@@ -55,14 +57,6 @@ export function AppHeader() {
           })}
         </nav>
         <div className="ml-auto flex items-center gap-2">
-          <a
-            href="/api/public/export/zip"
-            download
-            className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-          >
-            <Download className="h-4 w-4" />
-            <span className="hidden sm:inline">Export ZIP</span>
-          </a>
           {user && (
             <>
               <span className="hidden max-w-[180px] truncate text-xs text-muted-foreground lg:inline">

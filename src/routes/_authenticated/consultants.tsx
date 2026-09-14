@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/app-header";
+import { DataError } from "@/components/data-error";
 import {
   LEVELS,
   ROLES,
+  todayIsoDate,
   usedCapacity,
   type Consultant,
   type Level,
@@ -34,93 +36,155 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Avatar, CapacityBar, LevelBadge } from "@/components/consultant-bits";
-import { Loader2, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
+import { SkillChips, SkillInput } from "@/components/skill-input";
+import { Check, Copy, Loader2, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/consultants")({
   head: () => ({
     meta: [
-      { title: "Consultants — Capacity Board" },
-      { name: "description", content: "Manage your shared team roster: names, levels, roles, skills and capacity." },
-      { property: "og:title", content: "Consultants — Capacity Board" },
-      { property: "og:description", content: "Manage your shared team roster." },
+      { title: "Team — Capacity Board" },
+      { name: "description", content: "Your shared team roster, skills and capacity." },
+      { property: "og:title", content: "Team — Capacity Board" },
+      { property: "og:description", content: "Understand and manage your shared team roster." },
     ],
   }),
-  component: ConsultantsPage,
+  component: TeamPage,
 });
 
-function ConsultantsPage() {
-  const { consultants, demands, allocations, isLoading } = useBoardData();
+function TeamPage() {
+  const { consultants, demands, allocations, isLoading, error } = useBoardData();
   const deleteConsultant = useDeleteConsultant();
+  const capacityDate = todayIsoDate();
+  const [copied, setCopied] = useState(false);
+  const skillSuggestions = Array.from(
+    new Set(consultants.flatMap((consultant) => consultant.skills)),
+  );
+
+  const copyTeamLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.origin);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      window.prompt("Copy this team link", window.location.origin);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
       <AppHeader />
       <div className="mx-auto max-w-[1200px] px-6 pb-10 pt-6">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <DataError error={error} />
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Consultants</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
             <p className="text-sm text-muted-foreground">
-              Your shared team roster with current utilization.
+              See skills and availability at a glance. Colleagues can join and maintain their own
+              profile.
             </p>
           </div>
-          <ConsultantDialog />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={copyTeamLink}>
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? "Link copied" : "Copy team link"}
+            </Button>
+            <ConsultantDialog skillSuggestions={skillSuggestions} />
+          </div>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border bg-surface">
-          <div className="grid grid-cols-[minmax(0,2fr)_1fr_1fr_180px_100px] gap-4 border-b bg-muted/40 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="mb-4 rounded-xl border bg-surface px-4 py-3">
+          <p className="text-sm font-medium">Share with the team</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Anyone with the app link can create an account and add themselves. Use “Add manually”
+            only when you want to pre-create someone.
+          </p>
+        </div>
+
+        <div className="overflow-x-auto rounded-2xl border bg-surface">
+          <div className="grid min-w-[900px] grid-cols-[minmax(0,2fr)_1.2fr_1.7fr_190px_100px] gap-4 border-b bg-muted/40 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <div>Name</div>
-            <div>Level</div>
             <div>Role</div>
-            <div>Utilization</div>
+            <div>Skills</div>
+            <div>Capacity</div>
             <div className="text-right">Actions</div>
           </div>
           {isLoading && (
             <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading roster…
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading team…
             </div>
           )}
           {!isLoading && consultants.length === 0 && (
-            <div className="p-10 text-center text-sm text-muted-foreground">
-              No consultants yet. Add your first team member.
+            <div className="flex flex-col items-center justify-center p-10 text-center">
+              <p className="text-sm font-medium">No one is on the team yet</p>
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                Share the app link so colleagues can add themselves, or create the first profile
+                manually.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" variant="outline" onClick={copyTeamLink}>
+                  <Copy className="h-4 w-4" /> Copy team link
+                </Button>
+                <ConsultantDialog
+                  skillSuggestions={skillSuggestions}
+                  trigger={
+                    <Button size="sm">
+                      <UserPlus className="h-4 w-4" /> Add manually
+                    </Button>
+                  }
+                />
+              </div>
             </div>
           )}
-          {consultants.map((c) => {
-            const used = usedCapacity(c.id, demands, allocations);
+          {consultants.map((consultant) => {
+            const used = usedCapacity(consultant.id, demands, allocations, capacityDate);
+            const free = consultant.workingCapacity - used;
             return (
               <div
-                key={c.id}
-                className="grid grid-cols-[minmax(0,2fr)_1fr_1fr_180px_100px] items-center gap-4 border-b px-4 py-3 last:border-b-0 hover:bg-muted/30"
+                key={consultant.id}
+                className="grid min-w-[900px] grid-cols-[minmax(0,2fr)_1.2fr_1.7fr_190px_100px] items-center gap-4 border-b px-4 py-3 last:border-b-0 hover:bg-muted/30"
               >
                 <div className="flex min-w-0 items-center gap-3">
-                  <Avatar consultant={c} />
+                  <Avatar consultant={consultant} />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold">
-                      {c.name} {c.surname}
+                      {consultant.name} {consultant.surname}
                     </p>
-                    {c.email && (
-                      <p className="truncate text-xs text-muted-foreground">{c.email}</p>
-                    )}
-                    {c.skills.length > 0 && (
-                      <p className="truncate text-[11px] text-muted-foreground">
-                        {c.skills.join(" · ")}
-                      </p>
+                    {consultant.email && (
+                      <p className="truncate text-xs text-muted-foreground">{consultant.email}</p>
                     )}
                   </div>
                 </div>
-                <div><LevelBadge level={c.level} /></div>
-                <div className="text-sm text-muted-foreground">{c.role}</div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">{consultant.role}</span>
+                    <LevelBadge level={consultant.level} />
+                  </div>
+                </div>
+                <div>
+                  {consultant.skills.length ? (
+                    <SkillChips skills={consultant.skills} limit={5} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">No skills added</span>
+                  )}
+                </div>
                 <div>
                   <div className="mb-1 flex items-center justify-between text-[11px] tabular-nums text-muted-foreground">
-                    <span>{used}% used</span>
-                    <span>{Math.max(c.workingCapacity - used, 0)}% free</span>
+                    <span>{used}% allocated</span>
+                    <span className={free < 0 ? "text-destructive" : ""}>
+                      {free >= 0 ? `${free}% free` : `${Math.abs(free)}% over`}
+                    </span>
                   </div>
-                  <CapacityBar used={used} max={c.workingCapacity} />
+                  <CapacityBar used={used} max={consultant.workingCapacity} />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    {consultant.workingCapacity}% working capacity
+                  </p>
                 </div>
                 <div className="flex justify-end gap-1">
                   <ConsultantDialog
-                    consultant={c}
+                    consultant={consultant}
+                    skillSuggestions={skillSuggestions}
                     trigger={
-                      <Button size="icon" variant="ghost">
+                      <Button size="icon" variant="ghost" title="Edit team member">
                         <Pencil className="h-4 w-4" />
                       </Button>
                     }
@@ -128,10 +192,12 @@ function ConsultantsPage() {
                   <Button
                     size="icon"
                     variant="ghost"
+                    title="Remove team member"
                     className="text-destructive hover:text-destructive"
                     onClick={() => {
-                      if (confirm(`Remove ${c.name} ${c.surname}?`))
-                        deleteConsultant.mutate(c.id);
+                      if (confirm(`Remove ${consultant.name} ${consultant.surname}?`)) {
+                        deleteConsultant.mutate(consultant.id);
+                      }
                     }}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -149,9 +215,11 @@ function ConsultantsPage() {
 export function ConsultantDialog({
   consultant,
   trigger,
+  skillSuggestions = [],
 }: {
   consultant?: Consultant;
   trigger?: React.ReactNode;
+  skillSuggestions?: string[];
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(consultant?.name ?? "");
@@ -159,7 +227,7 @@ export function ConsultantDialog({
   const [email, setEmail] = useState(consultant?.email ?? "");
   const [level, setLevel] = useState<Level>(consultant?.level ?? "Consultant");
   const [role, setRole] = useState<Role>(consultant?.role ?? "Strategy");
-  const [skills, setSkills] = useState((consultant?.skills ?? []).join(", "));
+  const [skills, setSkills] = useState<string[]>(consultant?.skills ?? []);
   const [workingCapacity, setWorkingCapacity] = useState(
     String(consultant?.workingCapacity ?? 100),
   );
@@ -170,8 +238,30 @@ export function ConsultantDialog({
   const isEdit = !!consultant;
   const busy = create.isPending || update.isPending;
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setName(consultant?.name ?? "");
+      setSurname(consultant?.surname ?? "");
+      setEmail(consultant?.email ?? "");
+      setLevel(consultant?.level ?? "Consultant");
+      setRole(consultant?.role ?? "Strategy");
+      setSkills(consultant?.skills ?? []);
+      setWorkingCapacity(String(consultant?.workingCapacity ?? 100));
+      setError(null);
+    }
+    setOpen(nextOpen);
+  };
+
   const submit = async () => {
-    if (!name.trim() || !surname.trim()) return;
+    if (!name.trim() || !surname.trim()) {
+      setError("Name and surname are required.");
+      return;
+    }
+    const parsedCapacity = Number(workingCapacity);
+    if (!Number.isFinite(parsedCapacity) || parsedCapacity < 0 || parsedCapacity > 100) {
+      setError("Working capacity must be between 0% and 100%.");
+      return;
+    }
     setError(null);
     const payload = {
       name,
@@ -179,21 +269,14 @@ export function ConsultantDialog({
       email: email.trim() || null,
       level,
       role,
-      skills: skills
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-      workingCapacity: Math.max(0, Math.min(100, Number(workingCapacity) || 0)),
+      skills,
+      workingCapacity: parsedCapacity,
     };
     try {
       if (isEdit) {
         await update.mutateAsync({ id: consultant!.id, patch: payload });
       } else {
         await create.mutateAsync(payload);
-        setName("");
-        setSurname("");
-        setEmail("");
-        setSkills("");
       }
       setOpen(false);
     } catch (err) {
@@ -202,17 +285,17 @@ export function ConsultantDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         {trigger ?? (
           <Button>
-            <UserPlus className="h-4 w-4" /> Add consultant
+            <UserPlus className="h-4 w-4" /> Add manually
           </Button>
         )}
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit consultant" : "Add consultant"}</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit team member" : "Add team member manually"}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-3">
           <div className="grid grid-cols-2 gap-3">
@@ -231,37 +314,44 @@ export function ConsultantDialog({
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@company.com"
+              placeholder="Optional — lets them claim this profile"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label>Level</Label>
               <Select value={level} onValueChange={(v) => setLevel(v as Level)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
-                  {LEVELS.map((l) => <SelectItem key={l} value={l}>{l}</SelectItem>)}
+                  {LEVELS.map((item) => (
+                    <SelectItem key={item} value={item}>
+                      {item}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="grid gap-1.5">
               <Label>Role</Label>
               <Select value={role} onValueChange={(v) => setRole(v as Role)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
-                  {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                  {ROLES.map((item) => (
+                    <SelectItem key={item} value={item}>
+                      {item}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
           </div>
           <div className="grid gap-1.5">
             <Label>Skills / topics</Label>
-            <Input
-              value={skills}
-              onChange={(e) => setSkills(e.target.value)}
-              placeholder="Pricing, Supply chain, Python"
-            />
-            <p className="text-xs text-muted-foreground">Separate with commas.</p>
+            <SkillInput value={skills} onChange={setSkills} suggestions={skillSuggestions} />
           </div>
           <div className="grid gap-1.5">
             <Label>Working capacity (%)</Label>
@@ -274,15 +364,23 @@ export function ConsultantDialog({
               onChange={(e) => setWorkingCapacity(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              100% = full time. Use 60% for a part-time colleague.
+              100% is full time; use 60% for a three-day equivalent.
             </p>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="ghost" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
           <Button onClick={submit} disabled={busy}>
-            {isEdit ? "Save" : <><Plus className="h-4 w-4" /> Add</>}
+            {isEdit ? (
+              "Save"
+            ) : (
+              <>
+                <Plus className="h-4 w-4" /> Add
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

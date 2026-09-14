@@ -8,6 +8,13 @@
       "when": 1789388906639,
       "tag": "0000_collaboration_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789392500000,
+      "tag": "0001_usability_and_realtime",
+      "breakpoints": true
     }
   ]
 }
