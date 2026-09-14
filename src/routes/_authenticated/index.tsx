@@ -5,13 +5,18 @@ import { DataError } from "@/components/data-error";
 import {
   DEMAND_STATUSES,
   DEMAND_STATUS_META,
+  availabilityBlockOnDate,
   demandConsumesCapacityOn,
+  demandIsPipelineOn,
   demandOverlapsDate,
   demandStatusLabel,
   formatDate,
   formatFte,
+  pipelineCapacity,
+  staffedCapacity,
   todayIsoDate,
   usedCapacity,
+  workingCapacityOn,
   type Consultant,
   type Demand,
   type DemandStatus,
@@ -24,6 +29,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DemandDialog } from "@/components/demand-dialog";
 import { AllocateDialog } from "@/components/allocate-dialog";
+import { CapacityTimeline } from "@/components/capacity-timeline";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -82,7 +89,8 @@ const typeIcon = {
 };
 
 function Board() {
-  const { consultants, demands, allocations, isLoading, error } = useBoardData();
+  const { consultants, demands, allocations, availabilityBlocks, isLoading, error } =
+    useBoardData();
   const { user } = useSession();
   const navigate = useNavigate();
   const [allocDemand, setAllocDemand] = useState<{ id: string; consultantId?: string } | null>(
@@ -91,8 +99,13 @@ function Board() {
   const [statusFilter, setStatusFilter] = useState<DemandStatus | "All">("All");
   const [capacityDate, setCapacityDate] = useState(todayIsoDate);
   const [expandedConsultantId, setExpandedConsultantId] = useState<string | null>(null);
+  const [includePipeline, setIncludePipeline] = useState(false);
+  const [viewMode, setViewMode] = useState<"board" | "timeline">("board");
+  const [ownerFilter, setOwnerFilter] = useState<string>("all");
 
+  const activeConsultants = consultants.filter((consultant) => !consultant.archivedAt);
   const linked = user ? consultants.some((c) => c.userId === user.id) : true;
+  const myConsultant = user ? activeConsultants.find((c) => c.userId === user.id) : undefined;
 
   useEffect(() => {
     if (!isLoading && !error && user && !linked) {
@@ -101,22 +114,29 @@ function Board() {
   }, [isLoading, error, user, linked, navigate]);
 
   const filteredDemands = demands.filter(
-    (d) => statusFilter === "All" || d.status === statusFilter,
+    (demand) =>
+      (statusFilter === "All" || demand.status === statusFilter) &&
+      (ownerFilter === "all" || demand.ownerConsultantId === ownerFilter),
   );
 
-  const totalCapacity = consultants.reduce(
-    (sum, consultant) => sum + consultant.workingCapacity,
+  const totalCapacity = activeConsultants.reduce(
+    (sum, consultant) => sum + workingCapacityOn(consultant, availabilityBlocks, capacityDate),
     0,
   );
-  const usedTotal = consultants.reduce(
+  const committedTotal = activeConsultants.reduce(
     (sum, consultant) => sum + usedCapacity(consultant.id, demands, allocations, capacityDate),
     0,
   );
-  const utilization = totalCapacity ? Math.round((usedTotal / totalCapacity) * 100) : 0;
-  const available = Math.max(totalCapacity - usedTotal, 0);
+  const pipelineTotal = activeConsultants.reduce(
+    (sum, consultant) => sum + pipelineCapacity(consultant.id, demands, allocations, capacityDate),
+    0,
+  );
+  const loadTotal = committedTotal + (includePipeline ? pipelineTotal : 0);
+  const utilization = totalCapacity ? Math.round((loadTotal / totalCapacity) * 100) : 0;
+  const available = Math.max(totalCapacity - loadTotal, 0);
   const skillSuggestions = Array.from(
     new Set([
-      ...consultants.flatMap((consultant) => consultant.skills),
+      ...activeConsultants.flatMap((consultant) => consultant.skills),
       ...demands.flatMap((demand) => demand.skills),
     ]),
   );
@@ -126,9 +146,7 @@ function Board() {
       (d) => d.status !== "Lost" && d.requiredCapacity > 0 && demandOverlapsDate(d, capacityDate),
     )
     .reduce((sum, demand) => {
-      const staffed = allocations
-        .filter((allocation) => allocation.demandId === demand.id)
-        .reduce((value, allocation) => value + allocation.capacity, 0);
+      const staffed = staffedCapacity(demand.id, allocations, consultants);
       return sum + Math.max(demand.requiredCapacity - staffed, 0);
     }, 0);
 
@@ -153,15 +171,17 @@ function Board() {
         <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Team"
-            value={consultants.length.toString()}
-            sub={consultants.length === 1 ? "person" : "people"}
+            value={activeConsultants.length.toString()}
+            sub={activeConsultants.length === 1 ? "active person" : "active people"}
           />
           <StatCard
-            label="Utilization"
+            label={includePipeline ? "Planned load" : "Utilization"}
             value={totalCapacity ? `${utilization}%` : "—"}
             sub={
               totalCapacity
-                ? `${usedTotal}% allocated of ${totalCapacity}% capacity`
+                ? includePipeline
+                  ? `${committedTotal}% committed + ${pipelineTotal}% pipeline`
+                  : `${committedTotal}% committed of ${totalCapacity}% available capacity`
                 : "Add your team to get started"
             }
             accent
@@ -180,10 +200,30 @@ function Board() {
 
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Staffing board</h1>
-            <p className="text-sm text-muted-foreground">
-              See who is free, what needs staffing, and match the two.
-            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <div>
+                <h1 className="text-2xl font-semibold tracking-tight">Staffing board</h1>
+                <p className="text-sm text-muted-foreground">
+                  See who is free, what needs staffing, and match the two.
+                </p>
+              </div>
+              <div className="flex rounded-lg border bg-surface p-0.5">
+                {(["board", "timeline"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setViewMode(mode)}
+                    className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${
+                      viewMode === mode
+                        ? "bg-secondary text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="flex flex-wrap items-end gap-2">
             <label className="grid gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -195,6 +235,26 @@ function Board() {
                 className="w-40 bg-surface text-sm font-normal normal-case tracking-normal text-foreground"
               />
             </label>
+            <label className="flex h-10 items-center gap-2 rounded-md border bg-surface px-3 text-xs text-muted-foreground">
+              <Switch checked={includePipeline} onCheckedChange={setIncludePipeline} />
+              <span>Include pipeline</span>
+            </label>
+            <Select value={ownerFilter} onValueChange={setOwnerFilter}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All owners</SelectItem>
+                {myConsultant && <SelectItem value={myConsultant.id}>Mine</SelectItem>}
+                {activeConsultants
+                  .filter((consultant) => consultant.id !== myConsultant?.id)
+                  .map((consultant) => (
+                    <SelectItem key={consultant.id} value={consultant.id}>
+                      {consultant.name} {consultant.surname}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
             <Select
               value={statusFilter}
               onValueChange={(v) => setStatusFilter(v as DemandStatus | "All")}
@@ -211,7 +271,7 @@ function Board() {
                 ))}
               </SelectContent>
             </Select>
-            <DemandDialog skillSuggestions={skillSuggestions} />
+            <DemandDialog skillSuggestions={skillSuggestions} consultants={consultants} />
           </div>
         </div>
 
@@ -219,6 +279,22 @@ function Board() {
           <div className="flex items-center justify-center gap-2 rounded-2xl border bg-surface p-16 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading shared board…
           </div>
+        ) : viewMode === "timeline" ? (
+          <CapacityTimeline
+            consultants={activeConsultants}
+            allConsultants={consultants}
+            demands={demands}
+            visibleDemands={filteredDemands}
+            allocations={allocations}
+            availabilityBlocks={availabilityBlocks}
+            focusDate={capacityDate}
+            onFocusDateChange={setCapacityDate}
+            includePipeline={includePipeline}
+            onAllocateDemand={(demandId, consultantId) =>
+              setAllocDemand({ id: demandId, consultantId })
+            }
+            skillSuggestions={skillSuggestions}
+          />
         ) : (
           <div className="grid gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
             <section className="rounded-2xl border bg-surface p-4">
@@ -230,20 +306,43 @@ function Board() {
                   </p>
                 </div>
                 <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium">
-                  {consultants.length}
+                  {activeConsultants.length}
                 </span>
               </div>
               <div className="space-y-2">
-                {[...consultants]
-                  .sort(
-                    (a, b) =>
-                      b.workingCapacity -
-                      usedCapacity(b.id, demands, allocations, capacityDate) -
-                      (a.workingCapacity - usedCapacity(a.id, demands, allocations, capacityDate)),
-                  )
+                {[...activeConsultants]
+                  .sort((a, b) => {
+                    const bLoad =
+                      usedCapacity(b.id, demands, allocations, capacityDate) +
+                      (includePipeline
+                        ? pipelineCapacity(b.id, demands, allocations, capacityDate)
+                        : 0);
+                    const aLoad =
+                      usedCapacity(a.id, demands, allocations, capacityDate) +
+                      (includePipeline
+                        ? pipelineCapacity(a.id, demands, allocations, capacityDate)
+                        : 0);
+                    return (
+                      workingCapacityOn(b, availabilityBlocks, capacityDate) -
+                      bLoad -
+                      (workingCapacityOn(a, availabilityBlocks, capacityDate) - aLoad)
+                    );
+                  })
                   .map((consultant) => {
                     const used = usedCapacity(consultant.id, demands, allocations, capacityDate);
-                    const free = consultant.workingCapacity - used;
+                    const pipeline = pipelineCapacity(
+                      consultant.id,
+                      demands,
+                      allocations,
+                      capacityDate,
+                    );
+                    const working = workingCapacityOn(consultant, availabilityBlocks, capacityDate);
+                    const unavailable = !!availabilityBlockOnDate(
+                      consultant.id,
+                      availabilityBlocks,
+                      capacityDate,
+                    );
+                    const free = working - used - (includePipeline ? pipeline : 0);
                     const currentWork = allocations
                       .filter((allocation) => allocation.consultantId === consultant.id)
                       .map((allocation) => ({
@@ -254,7 +353,9 @@ function Board() {
                         (
                           item,
                         ): item is { allocation: (typeof allocations)[number]; demand: Demand } =>
-                          !!item.demand && demandConsumesCapacityOn(item.demand, capacityDate),
+                          !!item.demand &&
+                          (demandConsumesCapacityOn(item.demand, capacityDate) ||
+                            (includePipeline && demandIsPipelineOn(item.demand, capacityDate))),
                       );
                     const expanded = expandedConsultantId === consultant.id;
                     return (
@@ -292,11 +393,13 @@ function Board() {
                                     : "bg-success/20 text-success-foreground")
                               }
                             >
-                              {free > 0
-                                ? `${free}% free`
-                                : free === 0
-                                  ? "Full"
-                                  : `${Math.abs(free)}% over`}
+                              {unavailable
+                                ? "Unavailable"
+                                : free > 0
+                                  ? `${free}% free`
+                                  : free === 0
+                                    ? "Full"
+                                    : `${Math.abs(free)}% over`}
                             </span>
                             <ChevronDown
                               className={`h-3.5 w-3.5 text-muted-foreground transition ${expanded ? "rotate-180" : ""}`}
@@ -304,7 +407,10 @@ function Board() {
                           </div>
                         </div>
                         <div className="mt-3">
-                          <CapacityBar used={used} max={consultant.workingCapacity} />
+                          <CapacityBar
+                            used={used + (includePipeline ? pipeline : 0)}
+                            max={Math.max(working, 1)}
+                          />
                         </div>
                         {expanded && (
                           <div
@@ -313,7 +419,9 @@ function Board() {
                           >
                             <div className="mb-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
                               <span>Current work on {formatDate(capacityDate)}</span>
-                              <span>{used}% allocated</span>
+                              <span>
+                                {used}% committed{pipeline > 0 ? ` · +${pipeline}% pipeline` : ""}
+                              </span>
                             </div>
                             {currentWork.length ? (
                               <div className="space-y-1">
@@ -339,7 +447,7 @@ function Board() {
                       </div>
                     );
                   })}
-                {consultants.length === 0 && (
+                {activeConsultants.length === 0 && (
                   <EmptyState
                     icon={<Users className="h-5 w-5" />}
                     title="No team members yet"
@@ -460,7 +568,16 @@ function DemandCard({
   skillSuggestions: string[];
 }) {
   const Icon = typeIcon[demand.type];
-  const totalAllocated = allocations.reduce((sum, allocation) => sum + allocation.capacity, 0);
+  const activeAllocations = allocations.filter((allocation) =>
+    consultants.some(
+      (consultant) => consultant.id === allocation.consultantId && !consultant.archivedAt,
+    ),
+  );
+  const totalAllocated = activeAllocations.reduce(
+    (sum, allocation) => sum + allocation.capacity,
+    0,
+  );
+  const owner = consultants.find((consultant) => consultant.id === demand.ownerConsultantId);
   const gap = Math.max(demand.requiredCapacity - totalAllocated, 0);
   const over = Math.max(totalAllocated - demand.requiredCapacity, 0);
   const isClosed = demand.status === "Lost";
@@ -531,7 +648,12 @@ function DemandCard({
       </div>
 
       <h3 className="text-sm font-semibold leading-snug">{demand.title}</h3>
-      {demand.client && <p className="mt-0.5 text-xs text-muted-foreground">{demand.client}</p>}
+      {(demand.client || owner) && (
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {demand.client || "Internal"}
+          {owner ? ` · Owner: ${owner.name} ${owner.surname}` : " · No owner"}
+        </p>
+      )}
       {(demand.startDate || demand.endDate) && (
         <div className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
           <Calendar className="h-3 w-3" />
@@ -544,9 +666,9 @@ function DemandCard({
       )}
 
       <div className="mt-3 flex-1">
-        {allocations.length > 0 ? (
+        {activeAllocations.length > 0 ? (
           <div className="space-y-1.5">
-            {allocations.map((allocation) => {
+            {activeAllocations.map((allocation) => {
               const consultant = consultants.find((item) => item.id === allocation.consultantId);
               if (!consultant) return null;
               return (
@@ -608,12 +730,14 @@ function DemandCard({
 
       <div className="mt-3 flex items-center justify-between border-t pt-3">
         <span className="text-[11px] text-muted-foreground">
-          {allocations.length} {allocations.length === 1 ? "person" : "people"} · {totalAllocated}%
+          {activeAllocations.length} {activeAllocations.length === 1 ? "person" : "people"} ·{" "}
+          {totalAllocated}%
         </span>
         <div className="flex items-center gap-1">
           <DemandDialog
             demand={demand}
             skillSuggestions={skillSuggestions}
+            consultants={consultants}
             trigger={
               <Button size="icon" variant="ghost" className="h-8 w-8" title="Edit demand">
                 <Pencil className="h-3.5 w-3.5" />

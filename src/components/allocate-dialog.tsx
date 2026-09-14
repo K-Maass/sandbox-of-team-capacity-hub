@@ -11,10 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { useAllocate, useBoardData, useDeallocate } from "@/lib/data";
 import {
+  availabilityBlockOnDate,
+  demandOverlapsDate,
   formatDate,
+  pipelineCapacity,
   skillMatchCount,
   todayIsoDate,
   usedCapacity,
+  workingCapacityOn,
   type Consultant,
 } from "@/lib/types";
 import { Avatar, CapacityBar, LevelBadge } from "./consultant-bits";
@@ -35,7 +39,7 @@ export function AllocateDialog({
   preselectConsultantId,
   asOfDate,
 }: Props) {
-  const { consultants, demands, allocations } = useBoardData();
+  const { consultants, demands, allocations, availabilityBlocks } = useBoardData();
   const allocate = useAllocate();
   const deallocate = useDeallocate();
   const demand = demands.find((d) => d.id === demandId);
@@ -48,31 +52,48 @@ export function AllocateDialog({
 
   const selected = consultants.find((c) => c.id === selectedId);
   const currentAlloc = demandAllocs.find((a) => a.consultantId === selectedId);
-  const referenceDate = demand?.startDate || asOfDate || todayIsoDate();
+  const referenceDate =
+    demand && asOfDate && demandOverlapsDate(demand, asOfDate)
+      ? asOfDate
+      : demand?.startDate || asOfDate || todayIsoDate();
 
   const rankedConsultants = useMemo(() => {
-    if (!demand) return consultants;
-    return [...consultants].sort((a, b) => {
+    const activeConsultants = consultants.filter((consultant) => !consultant.archivedAt);
+    if (!demand) return activeConsultants;
+    return [...activeConsultants].sort((a, b) => {
       const matchDifference =
         skillMatchCount(b.skills, demand.skills) - skillMatchCount(a.skills, demand.skills);
       if (matchDifference) return matchDifference;
       const aFree =
-        a.workingCapacity - usedCapacity(a.id, demands, allocations, referenceDate, demand.id);
+        workingCapacityOn(a, availabilityBlocks, referenceDate) -
+        usedCapacity(a.id, demands, allocations, referenceDate, demand.id);
       const bFree =
-        b.workingCapacity - usedCapacity(b.id, demands, allocations, referenceDate, demand.id);
+        workingCapacityOn(b, availabilityBlocks, referenceDate) -
+        usedCapacity(b.id, demands, allocations, referenceDate, demand.id);
       return bFree - aFree;
     });
-  }, [consultants, demand, demands, allocations, referenceDate]);
+  }, [consultants, demand, demands, allocations, availabilityBlocks, referenceDate]);
 
   if (!demand) return null;
 
   const baseLoad = (c: Consultant) =>
     usedCapacity(c.id, demands, allocations, referenceDate, demand.id);
+  const basePipeline = (c: Consultant) =>
+    pipelineCapacity(c.id, demands, allocations, referenceDate, demand.id);
 
   const selectedBaseLoad = selected ? baseLoad(selected) : 0;
-  const availableBefore = selected ? selected.workingCapacity - selectedBaseLoad : 0;
-  const projectedLoad = selected ? selectedBaseLoad + capacity : 0;
-  const remaining = selected ? selected.workingCapacity - projectedLoad : 0;
+  const selectedPipeline = selected ? basePipeline(selected) : 0;
+  const selectedWorkingCapacity = selected
+    ? workingCapacityOn(selected, availabilityBlocks, referenceDate)
+    : 0;
+  const isPipeline = demand.status === "Incoming";
+  const availableBefore = selected ? selectedWorkingCapacity - selectedBaseLoad : 0;
+  const plannedBefore = selected ? availableBefore - selectedPipeline : 0;
+  const remaining = selected
+    ? isPipeline
+      ? plannedBefore - capacity
+      : availableBefore - capacity
+    : 0;
   const projectedOver = selected ? remaining < 0 : false;
 
   return (
@@ -97,7 +118,14 @@ export function AllocateDialog({
           <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border p-1">
             {rankedConsultants.map((c) => {
               const loadWithoutDemand = baseLoad(c);
-              const available = c.workingCapacity - loadWithoutDemand;
+              const pipelineWithoutDemand = basePipeline(c);
+              const working = workingCapacityOn(c, availabilityBlocks, referenceDate);
+              const available = working - loadWithoutDemand;
+              const unavailable = !!availabilityBlockOnDate(
+                c.id,
+                availabilityBlocks,
+                referenceDate,
+              );
               const isSelected = c.id === selectedId;
               const already = demandAllocs.some((a) => a.consultantId === c.id);
               const matches = skillMatchCount(c.skills, demand.skills);
@@ -133,13 +161,18 @@ export function AllocateDialog({
                       )}
                     </div>
                     <div className="mt-1 flex items-center gap-2">
-                      <CapacityBar used={loadWithoutDemand} max={c.workingCapacity} />
+                      <CapacityBar used={loadWithoutDemand} max={Math.max(working, 1)} />
                       <span
-                        className={`w-20 text-right text-[11px] tabular-nums ${
-                          available < 0 ? "text-destructive" : "text-muted-foreground"
+                        className={`w-28 text-right text-[11px] tabular-nums ${
+                          available < 0 || unavailable
+                            ? "text-destructive"
+                            : "text-muted-foreground"
                         }`}
                       >
-                        {available}% available
+                        {unavailable ? "Unavailable" : `${available}% available`}
+                        {pipelineWithoutDemand > 0 && !unavailable
+                          ? ` · +${pipelineWithoutDemand}% pipe`
+                          : ""}
                       </span>
                     </div>
                   </div>
@@ -169,22 +202,30 @@ export function AllocateDialog({
                 step={5}
               />
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                <CapacityFigure label="Available" value={`${availableBefore}%`} />
-                <CapacityFigure label="This allocation" value={`${capacity}%`} />
                 <CapacityFigure
-                  label="Remaining"
+                  label={isPipeline ? "Confirmed free" : "Available"}
+                  value={`${availableBefore}%`}
+                />
+                <CapacityFigure
+                  label={isPipeline ? "This pipeline" : "This allocation"}
+                  value={`${capacity}%`}
+                />
+                <CapacityFigure
+                  label={isPipeline ? "Free if won" : "Remaining"}
                   value={`${remaining}%`}
                   destructive={projectedOver}
                 />
               </div>
               <p className="mt-3 text-xs text-muted-foreground">
-                Existing active work: {selectedBaseLoad}% of {selected.workingCapacity}% working
-                capacity.
+                Existing committed work: {selectedBaseLoad}% of {selectedWorkingCapacity}% available
+                working capacity
+                {selectedPipeline > 0 ? `, plus ${selectedPipeline}% other pipeline` : ""}.
               </p>
               {projectedOver && (
                 <p className="mt-2 text-xs font-medium text-destructive">
-                  This would put {selected.name} {Math.abs(remaining)}% over capacity. You can still
-                  save it if that is intentional.
+                  {isPipeline ? "If this pipeline work is confirmed, " : "This would put "}
+                  {selected.name} {Math.abs(remaining)}% over capacity. You can still save it if
+                  that is intentional.
                 </p>
               )}
               {currentAlloc && (

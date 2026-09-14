@@ -22,8 +22,10 @@ import {
   formatDate,
   formatFte,
   ROLES,
+  staffedCapacity,
   todayIsoDate,
   usedCapacity,
+  workingCapacityOn,
 } from "@/lib/types";
 import { useBoardData } from "@/lib/data";
 
@@ -54,28 +56,37 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function InsightsPage() {
-  const { consultants, demands, allocations, error } = useBoardData();
+  const { consultants, demands, allocations, availabilityBlocks, error } = useBoardData();
+  const activeConsultants = consultants.filter((consultant) => !consultant.archivedAt);
   const capacityDate = todayIsoDate();
 
-  const consultantUtilization = consultants
+  const consultantUtilization = activeConsultants
     .map((consultant) => {
       const actual = usedCapacity(consultant.id, demands, allocations, capacityDate);
+      const availableWorkingCapacity = workingCapacityOn(
+        consultant,
+        availabilityBlocks,
+        capacityDate,
+      );
       return {
         id: consultant.id,
         name: `${consultant.name} ${consultant.surname[0]}.`,
         fullName: `${consultant.name} ${consultant.surname}`,
         actual,
-        workingCapacity: consultant.workingCapacity,
-        used: Math.min(actual, consultant.workingCapacity),
-        free: Math.max(consultant.workingCapacity - actual, 0),
-        over: Math.max(actual - consultant.workingCapacity, 0),
+        workingCapacity: availableWorkingCapacity,
+        used: Math.min(actual, availableWorkingCapacity),
+        free: Math.max(availableWorkingCapacity - actual, 0),
+        over: Math.max(actual - availableWorkingCapacity, 0),
       };
     })
     .sort((a, b) => b.actual - a.actual);
 
   const roleData = ROLES.map((role) => {
-    const team = consultants.filter((consultant) => consultant.role === role);
-    const capacity = team.reduce((sum, consultant) => sum + consultant.workingCapacity, 0);
+    const team = activeConsultants.filter((consultant) => consultant.role === role);
+    const capacity = team.reduce(
+      (sum, consultant) => sum + workingCapacityOn(consultant, availabilityBlocks, capacityDate),
+      0,
+    );
     const actual = team.reduce(
       (sum, consultant) => sum + usedCapacity(consultant.id, demands, allocations, capacityDate),
       0,
@@ -102,9 +113,7 @@ function InsightsPage() {
         demandOverlapsDate(demand, capacityDate),
     )
     .map((demand) => {
-      const staffed = allocations
-        .filter((allocation) => allocation.demandId === demand.id)
-        .reduce((sum, allocation) => sum + allocation.capacity, 0);
+      const staffed = staffedCapacity(demand.id, allocations, consultants);
       return {
         id: demand.id,
         title: demand.title,
@@ -114,8 +123,8 @@ function InsightsPage() {
     .filter((item) => item.gap > 0)
     .sort((a, b) => b.gap - a.gap);
 
-  const totalCapacity = consultants.reduce(
-    (sum, consultant) => sum + consultant.workingCapacity,
+  const totalCapacity = activeConsultants.reduce(
+    (sum, consultant) => sum + workingCapacityOn(consultant, availabilityBlocks, capacityDate),
     0,
   );
   const usedTotal = consultantUtilization.reduce((sum, consultant) => sum + consultant.actual, 0);
@@ -203,7 +212,7 @@ function InsightsPage() {
 
         <div className="grid gap-4 lg:grid-cols-2">
           <ChartCard title="Utilization by person" hint="Allocated, free and overbooked capacity">
-            {consultants.length ? (
+            {activeConsultants.length ? (
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={consultantUtilization}

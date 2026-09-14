@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/app-header";
+import { AvailabilityDialog } from "@/components/availability-dialog";
 import { DataError } from "@/components/data-error";
 import { useSession } from "@/lib/auth";
 import { useBoardData, useCreateConsultant, useUpdateConsultant } from "@/lib/data";
-import { LEVELS, ROLES, todayIsoDate, usedCapacity, type Level, type Role } from "@/lib/types";
+import {
+  LEVELS,
+  ROLES,
+  availabilityBlockOnDate,
+  formatDate,
+  pipelineCapacity,
+  todayIsoDate,
+  usedCapacity,
+  workingCapacityOn,
+  type Level,
+  type Role,
+} from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +29,7 @@ import {
 } from "@/components/ui/select";
 import { CapacityBar } from "@/components/consultant-bits";
 import { SkillInput } from "@/components/skill-input";
-import { CheckCircle2, Link2, Loader2 } from "lucide-react";
+import { ArchiveRestore, CalendarOff, CheckCircle2, Link2, Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/profile")({
   head: () => ({
@@ -37,7 +49,14 @@ export const Route = createFileRoute("/_authenticated/profile")({
 
 function ProfilePage() {
   const { user } = useSession();
-  const { consultants, demands, allocations, isLoading, error: dataError } = useBoardData();
+  const {
+    consultants,
+    demands,
+    allocations,
+    availabilityBlocks,
+    isLoading,
+    error: dataError,
+  } = useBoardData();
   const create = useCreateConsultant();
   const update = useUpdateConsultant();
 
@@ -77,6 +96,16 @@ function ProfilePage() {
   );
   const capacityDate = todayIsoDate();
   const used = mine ? usedCapacity(mine.id, demands, allocations, capacityDate) : 0;
+  const pipeline = mine ? pipelineCapacity(mine.id, demands, allocations, capacityDate) : 0;
+  const working = mine ? workingCapacityOn(mine, availabilityBlocks, capacityDate) : 0;
+  const unavailableToday = mine
+    ? availabilityBlockOnDate(mine.id, availabilityBlocks, capacityDate)
+    : undefined;
+  const myAvailability = mine
+    ? availabilityBlocks
+        .filter((block) => block.consultantId === mine.id && block.endDate >= capacityDate)
+        .sort((a, b) => a.startDate.localeCompare(b.startDate))
+    : [];
 
   const save = async () => {
     if (!user) return;
@@ -116,7 +145,10 @@ function ProfilePage() {
     if (!matchByEmail || !user) return;
     setError(null);
     try {
-      await update.mutateAsync({ id: matchByEmail.id, patch: { userId: user.id } });
+      await update.mutateAsync({
+        id: matchByEmail.id,
+        patch: { userId: user.id, archivedAt: null },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not link.");
     }
@@ -160,15 +192,35 @@ function ProfilePage() {
               </div>
             )}
 
-            {mine && (
+            {mine?.archivedAt && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
+                <div>
+                  <p className="text-sm font-medium">Your profile is archived</p>
+                  <p className="text-xs text-muted-foreground">
+                    You are not currently counted in team capacity or live staffing.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => update.mutate({ id: mine.id, patch: { archivedAt: null } })}
+                  disabled={update.isPending}
+                >
+                  <ArchiveRestore className="h-4 w-4" /> Rejoin active team
+                </Button>
+              </div>
+            )}
+
+            {mine && !mine.archivedAt && (
               <div className="rounded-2xl border bg-surface p-4">
                 <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Your current allocation ({capacityDate})</span>
+                  <span>Your availability today ({formatDate(capacityDate)})</span>
                   <span className="tabular-nums">
-                    {used}% of {mine.workingCapacity}%
+                    {unavailableToday
+                      ? "Unavailable"
+                      : `${used}% committed${pipeline > 0 ? ` · +${pipeline}% pipeline` : ""}`}
                   </span>
                 </div>
-                <CapacityBar used={used} max={mine.workingCapacity} />
+                <CapacityBar used={used} max={Math.max(working, 1)} />
               </div>
             )}
 
@@ -252,6 +304,51 @@ function ProfilePage() {
                 )}
               </div>
             </div>
+
+            {mine && !mine.archivedAt && (
+              <div className="rounded-2xl border bg-surface p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <CalendarOff className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm font-semibold">Unavailable dates</p>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Add vacation, training or other full days when you should not appear as
+                      staffable.
+                    </p>
+                  </div>
+                  <AvailabilityDialog consultant={mine} blocks={availabilityBlocks} />
+                </div>
+                {myAvailability.length > 0 ? (
+                  <div className="mt-3 space-y-1.5">
+                    {myAvailability.slice(0, 3).map((block) => (
+                      <div
+                        key={block.id}
+                        className="flex items-center justify-between gap-3 rounded-lg bg-muted/35 px-3 py-2 text-xs"
+                      >
+                        <span>
+                          {formatDate(block.startDate)} → {formatDate(block.endDate)}
+                        </span>
+                        <span className="truncate text-muted-foreground">
+                          {block.note || "Unavailable"}
+                        </span>
+                      </div>
+                    ))}
+                    {myAvailability.length > 3 && (
+                      <p className="text-[11px] text-muted-foreground">
+                        +{myAvailability.length - 3} more period
+                        {myAvailability.length - 3 === 1 ? "" : "s"}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    No upcoming unavailable dates.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

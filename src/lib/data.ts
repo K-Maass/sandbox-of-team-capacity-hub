@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 import type {
   Allocation,
+  AvailabilityBlock,
   Consultant,
   Demand,
   DemandStatus,
@@ -15,6 +16,7 @@ import type {
 type ConsultantRow = Tables<"consultants">;
 type DemandRow = Tables<"demands">;
 type AllocationRow = Tables<"allocations">;
+type AvailabilityRow = Tables<"availability_blocks">;
 
 const toConsultant = (r: ConsultantRow): Consultant => ({
   id: r.id,
@@ -26,6 +28,7 @@ const toConsultant = (r: ConsultantRow): Consultant => ({
   role: r.role as Role,
   skills: r.skills ?? [],
   workingCapacity: r.working_capacity,
+  archivedAt: r.archived_at,
 });
 
 const toDemand = (r: DemandRow): Demand => ({
@@ -39,6 +42,7 @@ const toDemand = (r: DemandRow): Demand => ({
   startDate: r.start_date,
   endDate: r.end_date,
   requiredCapacity: r.required_capacity,
+  ownerConsultantId: r.owner_consultant_id,
 });
 
 const toAllocation = (r: AllocationRow): Allocation => ({
@@ -48,10 +52,19 @@ const toAllocation = (r: AllocationRow): Allocation => ({
   capacity: r.capacity,
 });
 
+const toAvailabilityBlock = (r: AvailabilityRow): AvailabilityBlock => ({
+  id: r.id,
+  consultantId: r.consultant_id,
+  startDate: r.start_date,
+  endDate: r.end_date,
+  note: r.note,
+});
+
 export const queryKeys = {
   consultants: ["consultants"] as const,
   demands: ["demands"] as const,
   allocations: ["allocations"] as const,
+  availabilityBlocks: ["availability-blocks"] as const,
 };
 
 const sharedQueryOptions = {
@@ -67,7 +80,7 @@ export function useConsultants() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("consultants")
-        .select("id,user_id,name,surname,email,level,role,skills,working_capacity")
+        .select("id,user_id,name,surname,email,level,role,skills,working_capacity,archived_at")
         .order("surname", { ascending: true });
       if (error) throw new Error(error.message);
       return (data ?? []).map((row) => toConsultant(row as ConsultantRow));
@@ -83,7 +96,7 @@ export function useDemands() {
       const { data, error } = await supabase
         .from("demands")
         .select(
-          "id,title,client,type,status,description,skills,start_date,end_date,required_capacity,created_at,created_by,updated_at",
+          "id,title,client,type,status,description,skills,start_date,end_date,required_capacity,owner_consultant_id,created_at,created_by,updated_at",
         )
         .order("created_at", { ascending: false });
       if (error) throw new Error(error.message);
@@ -106,17 +119,39 @@ export function useAllocations() {
   });
 }
 
-/** Everything the board, roster and analytics need. */
+export function useAvailabilityBlocks() {
+  return useQuery({
+    queryKey: queryKeys.availabilityBlocks,
+    ...sharedQueryOptions,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("availability_blocks")
+        .select("id,consultant_id,start_date,end_date,note,created_at,updated_at")
+        .order("start_date", { ascending: true });
+      if (error) throw new Error(error.message);
+      return (data ?? []).map((row) => toAvailabilityBlock(row as AvailabilityRow));
+    },
+  });
+}
+
+/** Everything the board, roster, timeline and insights need. */
 export function useBoardData() {
   const consultants = useConsultants();
   const demands = useDemands();
   const allocations = useAllocations();
+  const availabilityBlocks = useAvailabilityBlocks();
   return {
     consultants: consultants.data ?? [],
     demands: demands.data ?? [],
     allocations: allocations.data ?? [],
-    isLoading: consultants.isLoading || demands.isLoading || allocations.isLoading,
-    error: consultants.error ?? demands.error ?? allocations.error ?? null,
+    availabilityBlocks: availabilityBlocks.data ?? [],
+    isLoading:
+      consultants.isLoading ||
+      demands.isLoading ||
+      allocations.isLoading ||
+      availabilityBlocks.isLoading,
+    error:
+      consultants.error ?? demands.error ?? allocations.error ?? availabilityBlocks.error ?? null,
   };
 }
 
@@ -143,6 +178,9 @@ export function useCapacityRealtime() {
       .on("postgres_changes", { event: "*", schema: "public", table: "allocations" }, () =>
         invalidate(queryKeys.allocations),
       )
+      .on("postgres_changes", { event: "*", schema: "public", table: "availability_blocks" }, () =>
+        invalidate(queryKeys.availabilityBlocks),
+      )
       .subscribe();
 
     return () => {
@@ -165,6 +203,7 @@ export type ConsultantInput = {
   skills?: string[];
   workingCapacity?: number;
   userId?: string | null;
+  archivedAt?: string | null;
 };
 
 function consultantInsert(input: ConsultantInput): TablesInsert<"consultants"> {
@@ -177,6 +216,7 @@ function consultantInsert(input: ConsultantInput): TablesInsert<"consultants"> {
     skills: input.skills ?? [],
     working_capacity: input.workingCapacity ?? 100,
     user_id: input.userId ?? null,
+    archived_at: input.archivedAt ?? null,
   };
 }
 
@@ -191,6 +231,7 @@ function consultantUpdate(input: Partial<ConsultantInput>): TablesUpdate<"consul
   if (input.skills !== undefined) payload.skills = input.skills;
   if (input.workingCapacity !== undefined) payload.working_capacity = input.workingCapacity;
   if (input.userId !== undefined) payload.user_id = input.userId;
+  if (input.archivedAt !== undefined) payload.archived_at = input.archivedAt;
   return payload;
 }
 
@@ -225,7 +266,11 @@ export function useUpdateConsultant() {
 }
 
 export function useDeleteConsultant() {
-  const invalidate = useInvalidate([queryKeys.consultants, queryKeys.allocations]);
+  const invalidate = useInvalidate([
+    queryKeys.consultants,
+    queryKeys.allocations,
+    queryKeys.availabilityBlocks,
+  ]);
   return useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("consultants").delete().eq("id", id);
@@ -245,6 +290,7 @@ export type DemandInput = {
   startDate: string | null;
   endDate: string | null;
   requiredCapacity: number;
+  ownerConsultantId: string | null;
 };
 
 function demandInsert(input: DemandInput, createdBy: string | null): TablesInsert<"demands"> {
@@ -258,6 +304,7 @@ function demandInsert(input: DemandInput, createdBy: string | null): TablesInser
     start_date: input.startDate || null,
     end_date: input.endDate || null,
     required_capacity: input.requiredCapacity,
+    owner_consultant_id: input.ownerConsultantId,
     created_by: createdBy,
   };
 }
@@ -273,6 +320,7 @@ function demandUpdate(input: Partial<DemandInput>): TablesUpdate<"demands"> {
   if (input.startDate !== undefined) payload.start_date = input.startDate || null;
   if (input.endDate !== undefined) payload.end_date = input.endDate || null;
   if (input.requiredCapacity !== undefined) payload.required_capacity = input.requiredCapacity;
+  if (input.ownerConsultantId !== undefined) payload.owner_consultant_id = input.ownerConsultantId;
   return payload;
 }
 
@@ -349,6 +397,41 @@ export function useDeallocate() {
         .delete()
         .eq("demand_id", demandId)
         .eq("consultant_id", consultantId);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export type AvailabilityBlockInput = {
+  consultantId: string;
+  startDate: string;
+  endDate: string;
+  note?: string;
+};
+
+export function useCreateAvailabilityBlock() {
+  const invalidate = useInvalidate([queryKeys.availabilityBlocks]);
+  return useMutation({
+    mutationFn: async (input: AvailabilityBlockInput) => {
+      const payload: TablesInsert<"availability_blocks"> = {
+        consultant_id: input.consultantId,
+        start_date: input.startDate,
+        end_date: input.endDate,
+        note: input.note?.trim() ?? "",
+      };
+      const { error } = await supabase.from("availability_blocks").insert(payload);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteAvailabilityBlock() {
+  const invalidate = useInvalidate([queryKeys.availabilityBlocks]);
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("availability_blocks").delete().eq("id", id);
       if (error) throw new Error(error.message);
     },
     onSuccess: invalidate,

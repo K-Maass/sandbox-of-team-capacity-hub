@@ -8,6 +8,44 @@ export type Database = {
   };
   public: {
     Tables: {
+      availability_blocks: {
+        Row: {
+          consultant_id: string;
+          created_at: string;
+          end_date: string;
+          id: string;
+          note: string;
+          start_date: string;
+          updated_at: string;
+        };
+        Insert: {
+          consultant_id: string;
+          created_at?: string;
+          end_date: string;
+          id?: string;
+          note?: string;
+          start_date: string;
+          updated_at?: string;
+        };
+        Update: {
+          consultant_id?: string;
+          created_at?: string;
+          end_date?: string;
+          id?: string;
+          note?: string;
+          start_date?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "availability_blocks_consultant_id_fkey";
+            columns: ["consultant_id"];
+            isOneToOne: false;
+            referencedRelation: "consultants";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       allocations: {
         Row: {
           capacity: number;
@@ -52,6 +90,7 @@ export type Database = {
       };
       consultants: {
         Row: {
+          archived_at: string | null;
           created_at: string;
           email: string | null;
           id: string;
@@ -65,6 +104,7 @@ export type Database = {
           working_capacity: number;
         };
         Insert: {
+          archived_at?: string | null;
           created_at?: string;
           email?: string | null;
           id?: string;
@@ -78,6 +118,7 @@ export type Database = {
           working_capacity?: number;
         };
         Update: {
+          archived_at?: string | null;
           created_at?: string;
           email?: string | null;
           id?: string;
@@ -100,6 +141,7 @@ export type Database = {
           description: string;
           end_date: string | null;
           id: string;
+          owner_consultant_id: string | null;
           required_capacity: number;
           skills: string[];
           start_date: string | null;
@@ -115,6 +157,7 @@ export type Database = {
           description?: string;
           end_date?: string | null;
           id?: string;
+          owner_consultant_id?: string | null;
           required_capacity?: number;
           skills?: string[];
           start_date?: string | null;
@@ -130,6 +173,7 @@ export type Database = {
           description?: string;
           end_date?: string | null;
           id?: string;
+          owner_consultant_id?: string | null;
           required_capacity?: number;
           skills?: string[];
           start_date?: string | null;
@@ -138,7 +182,15 @@ export type Database = {
           type?: string;
           updated_at?: string;
         };
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "demands_owner_consultant_id_fkey";
+            columns: ["owner_consultant_id"];
+            isOneToOne: false;
+            referencedRelation: "consultants";
+            referencedColumns: ["id"];
+          },
+        ];
       };
     };
     Views: {

@@ -1,12 +1,16 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/app-header";
+import { AvailabilityDialog } from "@/components/availability-dialog";
 import { DataError } from "@/components/data-error";
 import {
   LEVELS,
   ROLES,
+  availabilityBlockOnDate,
+  pipelineCapacity,
   todayIsoDate,
   usedCapacity,
+  workingCapacityOn,
   type Consultant,
   type Level,
   type Role,
@@ -37,7 +41,18 @@ import {
 } from "@/components/ui/dialog";
 import { Avatar, CapacityBar, LevelBadge } from "@/components/consultant-bits";
 import { SkillChips, SkillInput } from "@/components/skill-input";
-import { Check, Copy, Loader2, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  CalendarOff,
+  Check,
+  Copy,
+  Loader2,
+  Pencil,
+  Plus,
+  Trash2,
+  UserPlus,
+} from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/consultants")({
   head: () => ({
@@ -52,10 +67,16 @@ export const Route = createFileRoute("/_authenticated/consultants")({
 });
 
 function TeamPage() {
-  const { consultants, demands, allocations, isLoading, error } = useBoardData();
+  const { consultants, demands, allocations, availabilityBlocks, isLoading, error } =
+    useBoardData();
   const deleteConsultant = useDeleteConsultant();
+  const updateConsultant = useUpdateConsultant();
   const capacityDate = todayIsoDate();
   const [copied, setCopied] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const activeConsultants = consultants.filter((consultant) => !consultant.archivedAt);
+  const archivedConsultants = consultants.filter((consultant) => !!consultant.archivedAt);
+  const visibleConsultants = showArchived ? archivedConsultants : activeConsultants;
   const skillSuggestions = Array.from(
     new Set(consultants.flatMap((consultant) => consultant.skills)),
   );
@@ -79,33 +100,55 @@ function TeamPage() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
             <p className="text-sm text-muted-foreground">
-              See skills and availability at a glance. Colleagues can join and maintain their own
-              profile.
+              See skills, availability and time off at a glance. Archive people instead of deleting
+              history.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-lg border bg-surface p-0.5">
+              <button
+                type="button"
+                onClick={() => setShowArchived(false)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  !showArchived ? "bg-secondary text-foreground" : "text-muted-foreground"
+                }`}
+              >
+                Active {activeConsultants.length}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowArchived(true)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  showArchived ? "bg-secondary text-foreground" : "text-muted-foreground"
+                }`}
+              >
+                Archived {archivedConsultants.length}
+              </button>
+            </div>
             <Button variant="outline" onClick={copyTeamLink}>
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               {copied ? "Link copied" : "Copy team link"}
             </Button>
-            <ConsultantDialog skillSuggestions={skillSuggestions} />
+            {!showArchived && <ConsultantDialog skillSuggestions={skillSuggestions} />}
           </div>
         </div>
 
-        <div className="mb-4 rounded-xl border bg-surface px-4 py-3">
-          <p className="text-sm font-medium">Share with the team</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Anyone with the app link can create an account and add themselves. Use “Add manually”
-            only when you want to pre-create someone.
-          </p>
-        </div>
+        {!showArchived && (
+          <div className="mb-4 rounded-xl border bg-surface px-4 py-3">
+            <p className="text-sm font-medium">Share with the team</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Anyone with the app link can create an account and add themselves. Use “Add manually”
+              only when you want to pre-create someone.
+            </p>
+          </div>
+        )}
 
         <div className="overflow-x-auto rounded-2xl border bg-surface">
-          <div className="grid min-w-[900px] grid-cols-[minmax(0,2fr)_1.2fr_1.7fr_190px_100px] gap-4 border-b bg-muted/40 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="grid min-w-[980px] grid-cols-[minmax(0,2fr)_1.2fr_1.7fr_210px_140px] gap-4 border-b bg-muted/40 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <div>Name</div>
             <div>Role</div>
             <div>Skills</div>
-            <div>Capacity</div>
+            <div>Capacity today</div>
             <div className="text-right">Actions</div>
           </div>
           {isLoading && (
@@ -113,42 +156,61 @@ function TeamPage() {
               <Loader2 className="h-4 w-4 animate-spin" /> Loading team…
             </div>
           )}
-          {!isLoading && consultants.length === 0 && (
+          {!isLoading && visibleConsultants.length === 0 && (
             <div className="flex flex-col items-center justify-center p-10 text-center">
-              <p className="text-sm font-medium">No one is on the team yet</p>
-              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-                Share the app link so colleagues can add themselves, or create the first profile
-                manually.
+              <p className="text-sm font-medium">
+                {showArchived ? "No archived team members" : "No one is on the team yet"}
               </p>
-              <div className="mt-3 flex gap-2">
-                <Button size="sm" variant="outline" onClick={copyTeamLink}>
-                  <Copy className="h-4 w-4" /> Copy team link
-                </Button>
-                <ConsultantDialog
-                  skillSuggestions={skillSuggestions}
-                  trigger={
-                    <Button size="sm">
-                      <UserPlus className="h-4 w-4" /> Add manually
-                    </Button>
-                  }
-                />
-              </div>
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                {showArchived
+                  ? "Archived people stay here when someone leaves the active roster."
+                  : "Share the app link so colleagues can add themselves, or create the first profile manually."}
+              </p>
+              {!showArchived && (
+                <div className="mt-3 flex gap-2">
+                  <Button size="sm" variant="outline" onClick={copyTeamLink}>
+                    <Copy className="h-4 w-4" /> Copy team link
+                  </Button>
+                  <ConsultantDialog
+                    skillSuggestions={skillSuggestions}
+                    trigger={
+                      <Button size="sm">
+                        <UserPlus className="h-4 w-4" /> Add manually
+                      </Button>
+                    }
+                  />
+                </div>
+              )}
             </div>
           )}
-          {consultants.map((consultant) => {
+          {visibleConsultants.map((consultant) => {
             const used = usedCapacity(consultant.id, demands, allocations, capacityDate);
-            const free = consultant.workingCapacity - used;
+            const pipeline = pipelineCapacity(consultant.id, demands, allocations, capacityDate);
+            const working = workingCapacityOn(consultant, availabilityBlocks, capacityDate);
+            const unavailable = availabilityBlockOnDate(
+              consultant.id,
+              availabilityBlocks,
+              capacityDate,
+            );
+            const free = working - used;
             return (
               <div
                 key={consultant.id}
-                className="grid min-w-[900px] grid-cols-[minmax(0,2fr)_1.2fr_1.7fr_190px_100px] items-center gap-4 border-b px-4 py-3 last:border-b-0 hover:bg-muted/30"
+                className="grid min-w-[980px] grid-cols-[minmax(0,2fr)_1.2fr_1.7fr_210px_140px] items-center gap-4 border-b px-4 py-3 last:border-b-0 hover:bg-muted/30"
               >
                 <div className="flex min-w-0 items-center gap-3">
                   <Avatar consultant={consultant} />
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">
-                      {consultant.name} {consultant.surname}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-sm font-semibold">
+                        {consultant.name} {consultant.surname}
+                      </p>
+                      {consultant.archivedAt && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                          Archived
+                        </span>
+                      )}
+                    </div>
                     {consultant.email && (
                       <p className="truncate text-xs text-muted-foreground">{consultant.email}</p>
                     )}
@@ -168,18 +230,43 @@ function TeamPage() {
                   )}
                 </div>
                 <div>
-                  <div className="mb-1 flex items-center justify-between text-[11px] tabular-nums text-muted-foreground">
-                    <span>{used}% allocated</span>
-                    <span className={free < 0 ? "text-destructive" : ""}>
-                      {free >= 0 ? `${free}% free` : `${Math.abs(free)}% over`}
-                    </span>
-                  </div>
-                  <CapacityBar used={used} max={consultant.workingCapacity} />
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    {consultant.workingCapacity}% working capacity
-                  </p>
+                  {consultant.archivedAt ? (
+                    <p className="text-xs text-muted-foreground">Not included in live capacity</p>
+                  ) : unavailable ? (
+                    <div className="rounded-lg bg-muted/50 px-2.5 py-2">
+                      <p className="text-xs font-medium text-muted-foreground">Unavailable today</p>
+                      <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                        {unavailable.note || "Unavailable period"}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mb-1 flex items-center justify-between text-[11px] tabular-nums text-muted-foreground">
+                        <span>{used}% committed</span>
+                        <span className={free < 0 ? "text-destructive" : ""}>
+                          {free >= 0 ? `${free}% free` : `${Math.abs(free)}% over`}
+                        </span>
+                      </div>
+                      <CapacityBar used={used} max={consultant.workingCapacity} />
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        {consultant.workingCapacity}% working capacity
+                        {pipeline > 0 ? ` · +${pipeline}% pipeline` : ""}
+                      </p>
+                    </>
+                  )}
                 </div>
                 <div className="flex justify-end gap-1">
+                  {!consultant.archivedAt && (
+                    <AvailabilityDialog
+                      consultant={consultant}
+                      blocks={availabilityBlocks}
+                      trigger={
+                        <Button size="icon" variant="ghost" title="Unavailable dates">
+                          <CalendarOff className="h-4 w-4" />
+                        </Button>
+                      }
+                    />
+                  )}
                   <ConsultantDialog
                     consultant={consultant}
                     skillSuggestions={skillSuggestions}
@@ -189,19 +276,60 @@ function TeamPage() {
                       </Button>
                     }
                   />
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    title="Remove team member"
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => {
-                      if (confirm(`Remove ${consultant.name} ${consultant.surname}?`)) {
-                        deleteConsultant.mutate(consultant.id);
-                      }
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {consultant.archivedAt ? (
+                    <>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Restore to active team"
+                        onClick={() =>
+                          updateConsultant.mutate({
+                            id: consultant.id,
+                            patch: { archivedAt: null },
+                          })
+                        }
+                      >
+                        <ArchiveRestore className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Delete permanently"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => {
+                          if (
+                            confirm(
+                              `Permanently delete ${consultant.name} ${consultant.surname} and their allocation history?`,
+                            )
+                          ) {
+                            deleteConsultant.mutate(consultant.id);
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      title="Archive team member"
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Archive ${consultant.name} ${consultant.surname}? Their history will be kept, but they will stop counting toward live capacity and staffing.`,
+                          )
+                        ) {
+                          updateConsultant.mutate({
+                            id: consultant.id,
+                            patch: { archivedAt: new Date().toISOString() },
+                          });
+                        }
+                      }}
+                    >
+                      <Archive className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
             );

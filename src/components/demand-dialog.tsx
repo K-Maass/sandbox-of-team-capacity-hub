@@ -24,6 +24,7 @@ import {
   DEMAND_STATUS_META,
   DEMAND_TYPES,
   formatFte,
+  type Consultant,
   type Demand,
   type DemandStatus,
   type DemandType,
@@ -36,9 +37,10 @@ interface Props {
   demand?: Demand;
   trigger?: React.ReactNode;
   skillSuggestions?: string[];
+  consultants?: Consultant[];
 }
 
-export function DemandDialog({ demand, trigger, skillSuggestions = [] }: Props) {
+export function DemandDialog({ demand, trigger, skillSuggestions = [], consultants = [] }: Props) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(demand?.title ?? "");
   const [client, setClient] = useState(demand?.client ?? "");
@@ -49,6 +51,7 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [] }: Props) 
   const [startDate, setStartDate] = useState(demand?.startDate ?? "");
   const [endDate, setEndDate] = useState(demand?.endDate ?? "");
   const [requiredCapacity, setRequiredCapacity] = useState(String(demand?.requiredCapacity ?? 100));
+  const [ownerConsultantId, setOwnerConsultantId] = useState(demand?.ownerConsultantId ?? "none");
   const [error, setError] = useState<string | null>(null);
 
   const createDemand = useCreateDemand();
@@ -56,6 +59,9 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [] }: Props) 
   const isEdit = !!demand;
   const busy = createDemand.isPending || updateDemand.isPending;
   const parsedCapacity = Math.max(0, Math.min(1000, Number(requiredCapacity) || 0));
+  const currentOwner = consultants.find(
+    (consultant) => consultant.id === ownerConsultantId && consultant.archivedAt,
+  );
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (nextOpen) {
@@ -68,6 +74,7 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [] }: Props) 
       setStartDate(demand?.startDate ?? "");
       setEndDate(demand?.endDate ?? "");
       setRequiredCapacity(String(demand?.requiredCapacity ?? 100));
+      setOwnerConsultantId(demand?.ownerConsultantId ?? "none");
       setError(null);
     }
     setOpen(nextOpen);
@@ -93,6 +100,7 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [] }: Props) 
       startDate: startDate || null,
       endDate: endDate || null,
       requiredCapacity: parsedCapacity,
+      ownerConsultantId: ownerConsultantId === "none" ? null : ownerConsultantId,
     };
     try {
       if (isEdit) {
@@ -108,6 +116,7 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [] }: Props) 
         setRequiredCapacity("100");
         setType("Project");
         setStatus("Incoming");
+        setOwnerConsultantId("none");
       }
       setOpen(false);
     } catch (err) {
@@ -141,13 +150,38 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [] }: Props) 
               placeholder="e.g. Retail pricing overhaul"
             />
           </div>
-          <div className="grid gap-1.5">
-            <Label>Client / owner</Label>
-            <Input
-              value={client}
-              onChange={(e) => setClient(e.target.value)}
-              placeholder="Client or internal owner"
-            />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid gap-1.5">
+              <Label>Client / account</Label>
+              <Input
+                value={client}
+                onChange={(e) => setClient(e.target.value)}
+                placeholder="e.g. Nestlé or Internal"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label>Owner</Label>
+              <Select value={ownerConsultantId} onValueChange={setOwnerConsultantId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Unassigned" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {currentOwner && (
+                    <SelectItem value={currentOwner.id}>
+                      {currentOwner.name} {currentOwner.surname} (archived)
+                    </SelectItem>
+                  )}
+                  {consultants
+                    .filter((consultant) => !consultant.archivedAt)
+                    .map((consultant) => (
+                      <SelectItem key={consultant.id} value={consultant.id}>
+                        {consultant.name} {consultant.surname}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
