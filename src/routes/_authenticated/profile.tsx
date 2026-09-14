@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/app-header";
-import { AppUser } from "@/lib/auth-types";
 import { useSession } from "@/lib/auth";
 import {
   useBoardData,
@@ -35,7 +34,7 @@ export const Route = createFileRoute("/_authenticated/profile")({
 });
 
 function ProfilePage() {
-  const { user } = useSession() as { user: AppUser | null };
+  const { user } = useSession();
   const { consultants, demands, allocations, isLoading } = useBoardData();
   const create = useCreateConsultant();
   const update = useUpdateConsultant();
