@@ -1,0 +1,40 @@
+name: Repair v3 Bun lockfile
+
+on:
+  push:
+    branches:
+      - final-v3-planning
+    paths:
+      - package.json
+      - bun.lock
+      - .github/workflows/repair-v3-lock.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: final-v3-planning
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Regenerate lockfile from package.json
+        run: |
+          rm -f bun.lock
+          bun install --lockfile-only
+      - name: Commit repaired lockfile when changed
+        run: |
+          if git diff --quiet -- bun.lock; then
+            echo "bun.lock is already in sync"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bun.lock
+          git commit -m "Repair v3 dependency lockfile"
+          git push origin HEAD:final-v3-planning
