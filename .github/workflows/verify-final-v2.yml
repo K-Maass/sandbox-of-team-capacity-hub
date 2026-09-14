@@ -1,0 +1,21 @@
+name: Verify final Team Capacity Hub
+on:
+  push:
+    branches:
+      - verify/final-v2
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: Typecheck
+        run: bunx tsc --noEmit
+      - name: Production build
+        run: bun run build
