@@ -19,15 +19,10 @@ import {
   YAxis,
 } from "recharts";
 import { AppHeader } from "@/components/app-header";
-import {
-  DEMAND_STATUSES,
-  LEVELS,
-  ROLES,
-  useStore,
-  usedCapacity,
-} from "@/lib/store";
+import { DEMAND_STATUSES, LEVELS, ROLES, usedCapacity } from "@/lib/types";
+import { useBoardData } from "@/lib/data";
 
-export const Route = createFileRoute("/analytics")({
+export const Route = createFileRoute("/_authenticated/analytics")({
   head: () => ({
     meta: [
       { title: "Analytics — Capacity Board" },
@@ -63,13 +58,13 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function AnalyticsPage() {
-  const { consultants, demands } = useStore();
+  const { consultants, demands, allocations } = useBoardData();
 
   const utilization = consultants
     .map((c) => ({
       name: `${c.name} ${c.surname[0]}.`,
-      used: Math.min(usedCapacity(c.id, demands), 100),
-      free: Math.max(100 - usedCapacity(c.id, demands), 0),
+      used: Math.min(usedCapacity(c.id, demands, allocations), 100),
+      free: Math.max(100 - usedCapacity(c.id, demands, allocations), 0),
     }))
     .sort((a, b) => b.used - a.used);
 
@@ -81,8 +76,8 @@ function AnalyticsPage() {
 
   const roleData = ROLES.map((r) => {
     const team = consultants.filter((c) => c.role === r);
-    const capacity = team.length * 100;
-    const used = team.reduce((s, c) => s + usedCapacity(c.id, demands), 0);
+    const capacity = team.reduce((s, c) => s + c.workingCapacity, 0);
+    const used = team.reduce((s, c) => s + usedCapacity(c.id, demands, allocations), 0);
     return {
       role: r,
       team: team.length,
@@ -101,11 +96,11 @@ function AnalyticsPage() {
     fill: CHART_COLORS[i],
   }));
 
-  const totalCapacity = consultants.length * 100;
-  const usedTotal = consultants.reduce((s, c) => s + usedCapacity(c.id, demands), 0);
+  const totalCapacity = consultants.reduce((s, c) => s + c.workingCapacity, 0);
+  const usedTotal = consultants.reduce((s, c) => s + usedCapacity(c.id, demands, allocations), 0);
   const utilizationPct = totalCapacity ? Math.round((usedTotal / totalCapacity) * 100) : 0;
-  const bench = consultants.filter((c) => usedCapacity(c.id, demands) === 0).length;
-  const overbooked = consultants.filter((c) => usedCapacity(c.id, demands) > 100).length;
+  const bench = consultants.filter((c) => usedCapacity(c.id, demands, allocations) === 0).length;
+  const overbooked = consultants.filter((c) => usedCapacity(c.id, demands, allocations) > c.workingCapacity).length;
   const winRate = (() => {
     const closed = demands.filter((d) => d.status === "Won" || d.status === "Lost").length;
     const won = demands.filter((d) => d.status === "Won").length;

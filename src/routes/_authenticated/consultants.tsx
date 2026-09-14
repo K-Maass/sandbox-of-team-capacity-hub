@@ -2,15 +2,19 @@ import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/app-header";
 import {
-  actions,
-  Consultant,
   LEVELS,
-  Level,
   ROLES,
-  Role,
   usedCapacity,
-  useStore,
-} from "@/lib/store";
+  type Consultant,
+  type Level,
+  type Role,
+} from "@/lib/types";
+import {
+  useBoardData,
+  useCreateConsultant,
+  useDeleteConsultant,
+  useUpdateConsultant,
+} from "@/lib/data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,22 +34,24 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Avatar, CapacityBar, LevelBadge } from "@/components/consultant-bits";
-import { Pencil, Plus, Trash2, UserPlus } from "lucide-react";
+import { Loader2, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
 
-export const Route = createFileRoute("/consultants")({
+export const Route = createFileRoute("/_authenticated/consultants")({
   head: () => ({
     meta: [
       { title: "Consultants — Capacity Board" },
-      { name: "description", content: "Manage your team roster: names, levels, and roles." },
+      { name: "description", content: "Manage your shared team roster: names, levels, roles, skills and capacity." },
       { property: "og:title", content: "Consultants — Capacity Board" },
-      { property: "og:description", content: "Manage your team roster." },
+      { property: "og:description", content: "Manage your shared team roster." },
     ],
   }),
   component: ConsultantsPage,
 });
 
 function ConsultantsPage() {
-  const { consultants, demands } = useStore();
+  const { consultants, demands, allocations, isLoading } = useBoardData();
+  const deleteConsultant = useDeleteConsultant();
+
   return (
     <div className="min-h-screen bg-background">
       <AppHeader />
@@ -54,7 +60,7 @@ function ConsultantsPage() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Consultants</h1>
             <p className="text-sm text-muted-foreground">
-              Your team roster with current utilization.
+              Your shared team roster with current utilization.
             </p>
           </div>
           <ConsultantDialog />
@@ -68,13 +74,18 @@ function ConsultantsPage() {
             <div>Utilization</div>
             <div className="text-right">Actions</div>
           </div>
-          {consultants.length === 0 && (
+          {isLoading && (
+            <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading roster…
+            </div>
+          )}
+          {!isLoading && consultants.length === 0 && (
             <div className="p-10 text-center text-sm text-muted-foreground">
               No consultants yet. Add your first team member.
             </div>
           )}
           {consultants.map((c) => {
-            const used = usedCapacity(c.id, demands);
+            const used = usedCapacity(c.id, demands, allocations);
             return (
               <div
                 key={c.id}
@@ -86,6 +97,14 @@ function ConsultantsPage() {
                     <p className="truncate text-sm font-semibold">
                       {c.name} {c.surname}
                     </p>
+                    {c.email && (
+                      <p className="truncate text-xs text-muted-foreground">{c.email}</p>
+                    )}
+                    {c.skills.length > 0 && (
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {c.skills.join(" · ")}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div><LevelBadge level={c.level} /></div>
@@ -93,9 +112,9 @@ function ConsultantsPage() {
                 <div>
                   <div className="mb-1 flex items-center justify-between text-[11px] tabular-nums text-muted-foreground">
                     <span>{used}% used</span>
-                    <span>{Math.max(100 - used, 0)}% free</span>
+                    <span>{Math.max(c.workingCapacity - used, 0)}% free</span>
                   </div>
-                  <CapacityBar used={used} />
+                  <CapacityBar used={used} max={c.workingCapacity} />
                 </div>
                 <div className="flex justify-end gap-1">
                   <ConsultantDialog
@@ -111,7 +130,8 @@ function ConsultantsPage() {
                     variant="ghost"
                     className="text-destructive hover:text-destructive"
                     onClick={() => {
-                      if (confirm(`Remove ${c.name} ${c.surname}?`)) actions.removeConsultant(c.id);
+                      if (confirm(`Remove ${c.name} ${c.surname}?`))
+                        deleteConsultant.mutate(c.id);
                     }}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -126,7 +146,7 @@ function ConsultantsPage() {
   );
 }
 
-function ConsultantDialog({
+export function ConsultantDialog({
   consultant,
   trigger,
 }: {
@@ -136,20 +156,49 @@ function ConsultantDialog({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(consultant?.name ?? "");
   const [surname, setSurname] = useState(consultant?.surname ?? "");
+  const [email, setEmail] = useState(consultant?.email ?? "");
   const [level, setLevel] = useState<Level>(consultant?.level ?? "Consultant");
   const [role, setRole] = useState<Role>(consultant?.role ?? "Strategy");
-  const isEdit = !!consultant;
+  const [skills, setSkills] = useState((consultant?.skills ?? []).join(", "));
+  const [workingCapacity, setWorkingCapacity] = useState(
+    String(consultant?.workingCapacity ?? 100),
+  );
+  const [error, setError] = useState<string | null>(null);
 
-  const submit = () => {
+  const create = useCreateConsultant();
+  const update = useUpdateConsultant();
+  const isEdit = !!consultant;
+  const busy = create.isPending || update.isPending;
+
+  const submit = async () => {
     if (!name.trim() || !surname.trim()) return;
-    if (isEdit) {
-      actions.updateConsultant(consultant!.id, { name, surname, level, role });
-    } else {
-      actions.addConsultant({ name, surname, level, role });
-      setName("");
-      setSurname("");
+    setError(null);
+    const payload = {
+      name,
+      surname,
+      email: email.trim() || null,
+      level,
+      role,
+      skills: skills
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      workingCapacity: Math.max(0, Math.min(100, Number(workingCapacity) || 0)),
+    };
+    try {
+      if (isEdit) {
+        await update.mutateAsync({ id: consultant!.id, patch: payload });
+      } else {
+        await create.mutateAsync(payload);
+        setName("");
+        setSurname("");
+        setEmail("");
+        setSkills("");
+      }
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save.");
     }
-    setOpen(false);
   };
 
   return (
@@ -176,6 +225,15 @@ function ConsultantDialog({
               <Input value={surname} onChange={(e) => setSurname(e.target.value)} />
             </div>
           </div>
+          <div className="grid gap-1.5">
+            <Label>Email</Label>
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@company.com"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label>Level</Label>
@@ -196,10 +254,34 @@ function ConsultantDialog({
               </Select>
             </div>
           </div>
+          <div className="grid gap-1.5">
+            <Label>Skills / topics</Label>
+            <Input
+              value={skills}
+              onChange={(e) => setSkills(e.target.value)}
+              placeholder="Pricing, Supply chain, Python"
+            />
+            <p className="text-xs text-muted-foreground">Separate with commas.</p>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Working capacity (%)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              step={5}
+              value={workingCapacity}
+              onChange={(e) => setWorkingCapacity(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              100% = full time. Use 60% for a part-time colleague.
+            </p>
+          </div>
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={submit}>
+          <Button onClick={submit} disabled={busy}>
             {isEdit ? "Save" : <><Plus className="h-4 w-4" /> Add</>}
           </Button>
         </DialogFooter>

@@ -20,13 +20,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  actions,
   DEMAND_STATUSES,
   DEMAND_TYPES,
-  Demand,
-  DemandStatus,
-  DemandType,
-} from "@/lib/store";
+  type Demand,
+  type DemandStatus,
+  type DemandType,
+} from "@/lib/types";
+import { useCreateDemand, useUpdateDemand } from "@/lib/data";
 import { Plus } from "lucide-react";
 
 interface Props {
@@ -43,31 +43,44 @@ export function DemandDialog({ demand, trigger }: Props) {
   const [description, setDescription] = useState(demand?.description ?? "");
   const [startDate, setStartDate] = useState(demand?.startDate ?? "");
   const [endDate, setEndDate] = useState(demand?.endDate ?? "");
+  const [requiredCapacity, setRequiredCapacity] = useState(
+    String(demand?.requiredCapacity ?? 100),
+  );
+  const [error, setError] = useState<string | null>(null);
 
+  const createDemand = useCreateDemand();
+  const updateDemand = useUpdateDemand();
   const isEdit = !!demand;
+  const busy = createDemand.isPending || updateDemand.isPending;
 
-  const submit = () => {
+  const submit = async () => {
     if (!title.trim()) return;
-    if (isEdit) {
-      actions.updateDemand(demand!.id, {
-        title,
-        client,
-        type,
-        status,
-        description,
-        startDate,
-        endDate,
-      });
-    } else {
-      actions.addDemand({ title, client, type, status, description, startDate, endDate });
-    }
-    setOpen(false);
-    if (!isEdit) {
-      setTitle("");
-      setClient("");
-      setDescription("");
-      setStartDate("");
-      setEndDate("");
+    setError(null);
+    const payload = {
+      title,
+      client,
+      type,
+      status,
+      description,
+      startDate: startDate || null,
+      endDate: endDate || null,
+      requiredCapacity: Math.max(0, Math.min(1000, Number(requiredCapacity) || 0)),
+    };
+    try {
+      if (isEdit) {
+        await updateDemand.mutateAsync({ id: demand!.id, patch: payload });
+      } else {
+        await createDemand.mutateAsync(payload);
+        setTitle("");
+        setClient("");
+        setDescription("");
+        setStartDate("");
+        setEndDate("");
+        setRequiredCapacity("100");
+      }
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save.");
     }
   };
 
@@ -127,13 +140,28 @@ export function DemandDialog({ demand, trigger }: Props) {
             </div>
           </div>
           <div className="grid gap-1.5">
+            <Label>Required capacity (%)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={1000}
+              step={5}
+              value={requiredCapacity}
+              onChange={(e) => setRequiredCapacity(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Total effort needed, e.g. 150% means 1.5 full-time people.
+            </p>
+          </div>
+          <div className="grid gap-1.5">
             <Label>Notes</Label>
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </div>
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={submit}>{isEdit ? "Save" : "Create"}</Button>
+          <Button onClick={submit} disabled={busy}>{isEdit ? "Save" : "Create"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

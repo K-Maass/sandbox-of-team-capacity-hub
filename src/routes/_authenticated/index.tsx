@@ -1,13 +1,19 @@
 import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppHeader } from "@/components/app-header";
 import {
-  actions,
-  Demand,
-  DemandStatus,
-  useStore,
   usedCapacity,
-} from "@/lib/store";
+  type Consultant,
+  type Demand,
+  type DemandStatus,
+} from "@/lib/types";
+import {
+  useAllocate,
+  useBoardData,
+  useDeleteDemand,
+  useUpdateDemand,
+} from "@/lib/data";
+import { useSession } from "@/lib/auth";
 import { Avatar, CapacityBar, LevelBadge } from "@/components/consultant-bits";
 import { Button } from "@/components/ui/button";
 import { DemandDialog } from "@/components/demand-dialog";
@@ -23,7 +29,9 @@ import {
   Briefcase,
   Building2,
   Calendar,
+  Loader2,
   MoreHorizontal,
+  Pencil,
   Plus,
   Trash2,
   UserPlus,
@@ -36,13 +44,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/_authenticated/")({
   head: () => ({
     meta: [
       { title: "Capacity Board — Team Allocation" },
-      { name: "description", content: "Visual dashboard to manage consultant capacity and staff projects, topics and RfPs." },
+      { name: "description", content: "Shared dashboard to manage consultant capacity and staff projects, topics and RfPs." },
       { property: "og:title", content: "Capacity Board" },
-      { property: "og:description", content: "Visual dashboard to allocate consultants to demand." },
+      { property: "og:description", content: "Shared dashboard to allocate consultants to demand." },
     ],
   }),
   component: Board,
@@ -62,7 +70,9 @@ const typeIcon = {
 };
 
 function Board() {
-  const { consultants, demands } = useStore();
+  const { consultants, demands, allocations, isLoading } = useBoardData();
+  const { user } = useSession();
+  const allocate = useAllocate();
   const [allocDemand, setAllocDemand] = useState<{ id: string; consultantId?: string } | null>(null);
   const [statusFilter, setStatusFilter] = useState<DemandStatus | "All">("All");
 
@@ -70,8 +80,13 @@ function Board() {
     (d) => statusFilter === "All" || d.status === statusFilter,
   );
 
-  const totalCapacity = consultants.length * 100;
-  const usedTotal = consultants.reduce((s, c) => s + usedCapacity(c.id, demands), 0);
+  const linked = user ? consultants.some((c) => c.userId === user.id) : true;
+
+  const totalCapacity = consultants.reduce((s, c) => s + c.workingCapacity, 0);
+  const usedTotal = consultants.reduce(
+    (s, c) => s + usedCapacity(c.id, demands, allocations),
+    0,
+  );
   const utilization = totalCapacity ? Math.round((usedTotal / totalCapacity) * 100) : 0;
   const available = Math.max(totalCapacity - usedTotal, 0);
   const activeDemands = demands.filter((d) => d.status !== "Lost").length;
@@ -82,6 +97,20 @@ function Board() {
       <AppHeader />
 
       <div className="mx-auto max-w-[1600px] px-6 pb-10 pt-6">
+        {!linked && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-info/40 bg-info/10 p-4">
+            <div>
+              <p className="text-sm font-medium">You're not on the roster yet</p>
+              <p className="text-xs text-muted-foreground">
+                Add yourself as a consultant so your capacity counts towards the team.
+              </p>
+            </div>
+            <Button asChild size="sm">
+              <Link to="/profile">Set up my profile</Link>
+            </Button>
+          </div>
+        )}
+
         {/* Stats */}
         <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="Team size" value={consultants.length.toString()} sub="consultants" />
@@ -99,7 +128,7 @@ function Board() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as DemandStatus | "All")}>
               <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="All">All statuses</SelectItem>
@@ -113,7 +142,12 @@ function Board() {
           </div>
         </div>
 
-        {/* Two-column board */}
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 rounded-2xl border bg-surface p-16 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading shared board…
+          </div>
+        ) : (
+        /* Two-column board */
         <div className="grid gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
           {/* Left: Consultants */}
           <section className="rounded-2xl border bg-surface p-4">
@@ -128,10 +162,15 @@ function Board() {
             </div>
             <div className="space-y-2">
               {[...consultants]
-                .sort((a, b) => usedCapacity(a.id, demands) - usedCapacity(b.id, demands))
+                .sort(
+                  (a, b) =>
+                    b.workingCapacity -
+                    usedCapacity(b.id, demands, allocations) -
+                    (a.workingCapacity - usedCapacity(a.id, demands, allocations)),
+                )
                 .map((c) => {
-                  const used = usedCapacity(c.id, demands);
-                  const free = 100 - used;
+                  const used = usedCapacity(c.id, demands, allocations);
+                  const free = c.workingCapacity - used;
                   return (
                     <div
                       key={c.id}
@@ -152,6 +191,11 @@ function Board() {
                             <LevelBadge level={c.level} />
                           </div>
                           <p className="text-xs text-muted-foreground">{c.role}</p>
+                          {c.skills.length > 0 && (
+                            <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                              {c.skills.join(" · ")}
+                            </p>
+                          )}
                         </div>
                         <span
                           className={
@@ -167,7 +211,7 @@ function Board() {
                         </span>
                       </div>
                       <div className="mt-3">
-                        <CapacityBar used={used} />
+                        <CapacityBar used={used} max={c.workingCapacity} />
                       </div>
                     </div>
                   );
@@ -210,13 +254,18 @@ function Board() {
                     key={d.id}
                     demand={d}
                     consultants={consultants}
+                    allocations={allocations.filter((a) => a.demandId === d.id)}
                     onAllocate={(consultantId) => setAllocDemand({ id: d.id, consultantId })}
+                    onDrop={(consultantId) =>
+                      allocate.mutate({ demandId: d.id, consultantId, capacity: 25 })
+                    }
                   />
                 ))}
               </div>
             )}
           </section>
         </div>
+        )}
       </div>
 
       {allocDemand && (
@@ -246,15 +295,21 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string;
 function DemandCard({
   demand,
   consultants,
+  allocations,
   onAllocate,
+  onDrop,
 }: {
   demand: Demand;
-  consultants: ReturnType<typeof useStore>["consultants"];
+  consultants: Consultant[];
+  allocations: { id: string; consultantId: string; capacity: number }[];
   onAllocate: (consultantId?: string) => void;
+  onDrop: (consultantId: string) => void;
 }) {
   const Icon = typeIcon[demand.type];
-  const totalAllocated = demand.allocations.reduce((s, a) => s + a.capacity, 0);
+  const totalAllocated = allocations.reduce((s, a) => s + a.capacity, 0);
   const [dragOver, setDragOver] = useState(false);
+  const updateDemand = useUpdateDemand();
+  const deleteDemand = useDeleteDemand();
   return (
     <div
       onDragOver={(e) => {
@@ -270,12 +325,11 @@ function DemandCard({
         setDragOver(false);
         const consultantId = e.dataTransfer.getData("text/consultant-id");
         if (!consultantId) return;
-        const existing = demand.allocations.find((a) => a.consultantId === consultantId);
-        if (existing) {
+        if (allocations.some((a) => a.consultantId === consultantId)) {
           onAllocate(consultantId);
           return;
         }
-        actions.allocate(demand.id, consultantId, 25);
+        onDrop(consultantId);
       }}
       className={
         "group flex flex-col rounded-xl border bg-card p-4 transition hover:shadow-md " +
@@ -300,13 +354,18 @@ function DemandCard({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {(["Incoming", "In Progress", "Won", "Lost"] as DemandStatus[]).map((s) => (
-              <DropdownMenuItem key={s} onClick={() => actions.updateDemand(demand.id, { status: s })}>
+              <DropdownMenuItem
+                key={s}
+                onClick={() => updateDemand.mutate({ id: demand.id, patch: { status: s } })}
+              >
                 Mark {s}
               </DropdownMenuItem>
             ))}
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"
-              onClick={() => actions.removeDemand(demand.id)}
+              onClick={() => {
+                if (confirm(`Delete “${demand.title}”?`)) deleteDemand.mutate(demand.id);
+              }}
             >
               <Trash2 className="h-4 w-4" /> Delete
             </DropdownMenuItem>
@@ -330,14 +389,14 @@ function DemandCard({
       )}
 
       <div className="mt-3 flex-1">
-        {demand.allocations.length > 0 ? (
+        {allocations.length > 0 ? (
           <div className="space-y-1.5">
-            {demand.allocations.map((a) => {
+            {allocations.map((a) => {
               const c = consultants.find((x) => x.id === a.consultantId);
               if (!c) return null;
               return (
                 <button
-                  key={a.consultantId}
+                  key={a.id}
                   onClick={() => onAllocate(a.consultantId)}
                   className="flex w-full items-center gap-2 rounded-md p-1.5 text-left hover:bg-secondary/60"
                 >
@@ -357,13 +416,35 @@ function DemandCard({
         )}
       </div>
 
+      {demand.requiredCapacity > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between text-[11px] tabular-nums text-muted-foreground">
+            <span>Staffed</span>
+            <span>
+              {totalAllocated}% of {demand.requiredCapacity}%
+            </span>
+          </div>
+          <CapacityBar used={totalAllocated} max={demand.requiredCapacity} />
+        </div>
+      )}
+
       <div className="mt-3 flex items-center justify-between border-t pt-3">
         <span className="text-[11px] text-muted-foreground">
-          {demand.allocations.length} people · {totalAllocated}%
+          {allocations.length} people · {totalAllocated}%
         </span>
-        <Button size="sm" variant="secondary" onClick={() => onAllocate(undefined)}>
-          <UserPlus className="h-3.5 w-3.5" /> Allocate
-        </Button>
+        <div className="flex items-center gap-1">
+          <DemandDialog
+            demand={demand}
+            trigger={
+              <Button size="icon" variant="ghost" className="h-8 w-8">
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            }
+          />
+          <Button size="sm" variant="secondary" onClick={() => onAllocate(undefined)}>
+            <UserPlus className="h-3.5 w-3.5" /> Allocate
+          </Button>
+        </div>
       </div>
     </div>
   );

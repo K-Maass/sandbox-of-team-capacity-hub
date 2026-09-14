@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { actions, Consultant, Demand, usedCapacity, useStore } from "@/lib/store";
+import { useAllocate, useBoardData, useDeallocate } from "@/lib/data";
+import { usedCapacity, type Consultant } from "@/lib/types";
 import { Avatar, CapacityBar, LevelBadge } from "./consultant-bits";
 
 interface Props {
@@ -20,27 +21,30 @@ interface Props {
 }
 
 export function AllocateDialog({ demandId, open, onOpenChange, preselectConsultantId }: Props) {
-  const { consultants, demands } = useStore();
+  const { consultants, demands, allocations } = useBoardData();
+  const allocate = useAllocate();
+  const deallocate = useDeallocate();
   const demand = demands.find((d) => d.id === demandId);
+  const demandAllocs = allocations.filter((a) => a.demandId === demandId);
   const [selectedId, setSelectedId] = useState<string | undefined>(preselectConsultantId);
   const [capacity, setCapacity] = useState(25);
 
   const selected = consultants.find((c) => c.id === selectedId);
-  const currentAlloc = demand?.allocations.find((a) => a.consultantId === selectedId);
+  const currentAlloc = demandAllocs.find((a) => a.consultantId === selectedId);
 
   useEffect(() => {
     setSelectedId(preselectConsultantId);
     setCapacity(
       preselectConsultantId
-        ? demand?.allocations.find((a) => a.consultantId === preselectConsultantId)?.capacity ??
-            25
+        ? demandAllocs.find((a) => a.consultantId === preselectConsultantId)?.capacity ?? 25
         : 25,
     );
-  }, [preselectConsultantId, demand?.id, open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preselectConsultantId, demandId, open]);
 
   if (!demand) return null;
 
-  const allocated = (c: Consultant) => usedCapacity(c.id, demands);
+  const allocated = (c: Consultant) => usedCapacity(c.id, demands, allocations);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -57,14 +61,14 @@ export function AllocateDialog({ demandId, open, onOpenChange, preselectConsulta
             {consultants.map((c) => {
               const used = allocated(c);
               const isSelected = c.id === selectedId;
-              const already = demand.allocations.some((a) => a.consultantId === c.id);
+              const already = demandAllocs.some((a) => a.consultantId === c.id);
               return (
                 <button
                   key={c.id}
                   onClick={() => {
                     setSelectedId(c.id);
                     setCapacity(
-                      demand.allocations.find((a) => a.consultantId === c.id)?.capacity ?? 25,
+                      demandAllocs.find((a) => a.consultantId === c.id)?.capacity ?? 25,
                     );
                   }}
                   className={
@@ -86,15 +90,20 @@ export function AllocateDialog({ demandId, open, onOpenChange, preselectConsulta
                       )}
                     </div>
                     <div className="mt-1 flex items-center gap-2">
-                      <CapacityBar used={used} />
-                      <span className="w-10 text-right text-[11px] tabular-nums text-muted-foreground">
-                        {used}%
+                      <CapacityBar used={used} max={c.workingCapacity} />
+                      <span className="w-14 text-right text-[11px] tabular-nums text-muted-foreground">
+                        {used}/{c.workingCapacity}%
                       </span>
                     </div>
                   </div>
                 </button>
               );
             })}
+            {consultants.length === 0 && (
+              <p className="p-4 text-center text-xs text-muted-foreground">
+                No consultants yet — add your team first.
+              </p>
+            )}
           </div>
 
           {selected && (
@@ -113,7 +122,8 @@ export function AllocateDialog({ demandId, open, onOpenChange, preselectConsulta
                 step={5}
               />
               <p className="mt-2 text-xs text-muted-foreground">
-                Currently at {allocated(selected)}% across active work.
+                Currently at {allocated(selected)}% of {selected.workingCapacity}% across active
+                work.
                 {currentAlloc && ` This demand already uses ${currentAlloc.capacity}%.`}
               </p>
             </div>
@@ -124,8 +134,8 @@ export function AllocateDialog({ demandId, open, onOpenChange, preselectConsulta
           {selected && currentAlloc && (
             <Button
               variant="ghost"
-              onClick={() => {
-                actions.deallocate(demand.id, selected.id);
+              onClick={async () => {
+                await deallocate.mutateAsync({ demandId, consultantId: selected.id });
                 onOpenChange(false);
               }}
             >
@@ -133,10 +143,10 @@ export function AllocateDialog({ demandId, open, onOpenChange, preselectConsulta
             </Button>
           )}
           <Button
-            disabled={!selected}
-            onClick={() => {
+            disabled={!selected || allocate.isPending}
+            onClick={async () => {
               if (!selected) return;
-              actions.allocate(demand.id, selected.id, capacity);
+              await allocate.mutateAsync({ demandId, consultantId: selected.id, capacity });
               onOpenChange(false);
             }}
           >

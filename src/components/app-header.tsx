@@ -1,13 +1,30 @@
-import { Link, useRouterState } from "@tanstack/react-router";
-import { BarChart3, Download, LayoutDashboard, Users } from "lucide-react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { BarChart3, Download, LayoutDashboard, LogOut, UserCircle, Users } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useSession } from "@/lib/auth";
+import { Button } from "@/components/ui/button";
 
 export function AppHeader() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { user } = useSession();
+
   const links = [
     { to: "/", label: "Board", icon: LayoutDashboard },
     { to: "/consultants", label: "Consultants", icon: Users },
     { to: "/analytics", label: "Analytics", icon: BarChart3 },
+    { to: "/profile", label: "My profile", icon: UserCircle },
   ];
+
+  const signOut = async () => {
+    await queryClient.cancelQueries();
+    queryClient.clear();
+    await supabase.auth.signOut();
+    navigate({ to: "/auth", replace: true });
+  };
+
   return (
     <header className="sticky top-0 z-20 border-b bg-surface/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-6 px-6">
@@ -32,7 +49,7 @@ export function AppHeader() {
                 }
               >
                 <Icon className="h-4 w-4" />
-                {label}
+                <span className="hidden md:inline">{label}</span>
               </Link>
             );
           })}
@@ -46,6 +63,17 @@ export function AppHeader() {
             <Download className="h-4 w-4" />
             <span className="hidden sm:inline">Export ZIP</span>
           </a>
+          {user && (
+            <>
+              <span className="hidden max-w-[180px] truncate text-xs text-muted-foreground lg:inline">
+                {user.email}
+              </span>
+              <Button variant="ghost" size="sm" onClick={signOut}>
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Sign out</span>
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </header>
