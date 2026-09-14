@@ -14,7 +14,135 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      allocations: {
+        Row: {
+          capacity: number
+          consultant_id: string
+          created_at: string
+          demand_id: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          capacity?: number
+          consultant_id: string
+          created_at?: string
+          demand_id: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          capacity?: number
+          consultant_id?: string
+          created_at?: string
+          demand_id?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "allocations_consultant_id_fkey"
+            columns: ["consultant_id"]
+            isOneToOne: false
+            referencedRelation: "consultants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "allocations_demand_id_fkey"
+            columns: ["demand_id"]
+            isOneToOne: false
+            referencedRelation: "demands"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      consultants: {
+        Row: {
+          created_at: string
+          email: string | null
+          id: string
+          level: string
+          name: string
+          role: string
+          skills: string[]
+          surname: string
+          updated_at: string
+          user_id: string | null
+          working_capacity: number
+        }
+        Insert: {
+          created_at?: string
+          email?: string | null
+          id?: string
+          level?: string
+          name: string
+          role?: string
+          skills?: string[]
+          surname: string
+          updated_at?: string
+          user_id?: string | null
+          working_capacity?: number
+        }
+        Update: {
+          created_at?: string
+          email?: string | null
+          id?: string
+          level?: string
+          name?: string
+          role?: string
+          skills?: string[]
+          surname?: string
+          updated_at?: string
+          user_id?: string | null
+          working_capacity?: number
+        }
+        Relationships: []
+      }
+      demands: {
+        Row: {
+          client: string
+          created_at: string
+          created_by: string | null
+          description: string
+          end_date: string | null
+          id: string
+          required_capacity: number
+          start_date: string | null
+          status: string
+          title: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          client?: string
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          end_date?: string | null
+          id?: string
+          required_capacity?: number
+          start_date?: string | null
+          status?: string
+          title: string
+          type?: string
+          updated_at?: string
+        }
+        Update: {
+          client?: string
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          end_date?: string | null
+          id?: string
+          required_capacity?: number
+          start_date?: string | null
+          status?: string
+          title?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
