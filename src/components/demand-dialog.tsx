@@ -32,6 +32,7 @@ import {
 import { useCreateDemand, useUpdateDemand } from "@/lib/data";
 import { SkillInput } from "@/components/skill-input";
 import { ChevronDown, Plus } from "lucide-react";
+import { parseDemandRequiredCapacity, validateDemandForm } from "@/domain/capacity/form-validation";
 
 interface Props {
   demand?: Demand;
@@ -58,7 +59,7 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [], consultan
   const updateDemand = useUpdateDemand();
   const isEdit = !!demand;
   const busy = createDemand.isPending || updateDemand.isPending;
-  const parsedCapacity = Math.max(0, Math.min(1000, Number(requiredCapacity) || 0));
+  const parsedCapacity = parseDemandRequiredCapacity(requiredCapacity);
   const currentOwner = consultants.find(
     (consultant) => consultant.id === ownerConsultantId && consultant.archivedAt,
   );
@@ -81,12 +82,9 @@ export function DemandDialog({ demand, trigger, skillSuggestions = [], consultan
   };
 
   const submit = async () => {
-    if (!title.trim()) {
-      setError("Title is required.");
-      return;
-    }
-    if (startDate && endDate && endDate < startDate) {
-      setError("End date cannot be before start date.");
+    const validationError = validateDemandForm(title, startDate, endDate);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     setError(null);

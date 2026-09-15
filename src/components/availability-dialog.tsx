@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCreateAvailabilityBlock, useDeleteAvailabilityBlock } from "@/lib/data";
 import { formatDate, todayIsoDate, type AvailabilityBlock, type Consultant } from "@/lib/types";
+import { validateAvailabilityBlockForm } from "@/domain/capacity/form-validation";
 
 export function AvailabilityDialog({
   consultant,
@@ -44,17 +45,9 @@ export function AvailabilityDialog({
   const past = mine.filter((block) => block.endDate < today).reverse();
 
   const add = async () => {
-    if (!startDate || !endDate) {
-      setError("Choose a start and end date.");
-      return;
-    }
-    if (endDate < startDate) {
-      setError("End date cannot be before start date.");
-      return;
-    }
-    const overlaps = mine.some((block) => block.startDate <= endDate && block.endDate >= startDate);
-    if (overlaps) {
-      setError("This overlaps an existing unavailable period.");
+    const validationError = validateAvailabilityBlockForm(startDate, endDate, mine);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     setError(null);

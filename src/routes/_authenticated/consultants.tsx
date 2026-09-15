@@ -53,6 +53,7 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
+import { validateConsultantForm } from "@/domain/capacity/form-validation";
 
 export const Route = createFileRoute("/_authenticated/consultants")({
   head: () => ({
@@ -381,13 +382,9 @@ export function ConsultantDialog({
   };
 
   const submit = async () => {
-    if (!name.trim() || !surname.trim()) {
-      setError("Name and surname are required.");
-      return;
-    }
-    const parsedCapacity = Number(workingCapacity);
-    if (!Number.isFinite(parsedCapacity) || parsedCapacity < 0 || parsedCapacity > 100) {
-      setError("Working capacity must be between 0% and 100%.");
+    const validation = validateConsultantForm(name, surname, workingCapacity);
+    if (validation.error) {
+      setError(validation.error);
       return;
     }
     setError(null);
@@ -398,7 +395,7 @@ export function ConsultantDialog({
       level,
       role,
       skills,
-      workingCapacity: parsedCapacity,
+      workingCapacity: validation.workingCapacity,
     };
     try {
       if (isEdit) {
