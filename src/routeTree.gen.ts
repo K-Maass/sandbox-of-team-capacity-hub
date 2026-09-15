@@ -9,21 +9,22 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
+import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
-import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
-import { Route as AuthenticatedConsultantsRouteImport } from './routes/_authenticated/consultants'
 import { Route as AuthenticatedAnalyticsRouteImport } from './routes/_authenticated/analytics'
+import { Route as AuthenticatedConsultantsRouteImport } from './routes/_authenticated/consultants'
+import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
+import { Route as ApiAiSmokeRouteImport } from './routes/api/ai/smoke'
 import { Route as ApiPublicExportZipRouteImport } from './routes/api/public/export/zip'
 
+const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
+  id: '/_authenticated',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
-  id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
@@ -31,9 +32,9 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
-  id: '/profile',
-  path: '/profile',
+const AuthenticatedAnalyticsRoute = AuthenticatedAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedConsultantsRoute =
@@ -42,10 +43,15 @@ const AuthenticatedConsultantsRoute =
     path: '/consultants',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedAnalyticsRoute = AuthenticatedAnalyticsRouteImport.update({
-  id: '/analytics',
-  path: '/analytics',
+const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
   getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const ApiAiSmokeRoute = ApiAiSmokeRouteImport.update({
+  id: '/api/ai/smoke',
+  path: '/api/ai/smoke',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicExportZipRoute = ApiPublicExportZipRouteImport.update({
   id: '/api/public/export/zip',
@@ -59,6 +65,7 @@ export interface FileRoutesByFullPath {
   '/analytics': typeof AuthenticatedAnalyticsRoute
   '/consultants': typeof AuthenticatedConsultantsRoute
   '/profile': typeof AuthenticatedProfileRoute
+  '/api/ai/smoke': typeof ApiAiSmokeRoute
   '/api/public/export/zip': typeof ApiPublicExportZipRoute
 }
 export interface FileRoutesByTo {
@@ -67,6 +74,7 @@ export interface FileRoutesByTo {
   '/consultants': typeof AuthenticatedConsultantsRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/': typeof AuthenticatedIndexRoute
+  '/api/ai/smoke': typeof ApiAiSmokeRoute
   '/api/public/export/zip': typeof ApiPublicExportZipRoute
 }
 export interface FileRoutesById {
@@ -77,6 +85,7 @@ export interface FileRoutesById {
   '/_authenticated/consultants': typeof AuthenticatedConsultantsRoute
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/api/ai/smoke': typeof ApiAiSmokeRoute
   '/api/public/export/zip': typeof ApiPublicExportZipRoute
 }
 export interface FileRouteTypes {
@@ -87,6 +96,7 @@ export interface FileRouteTypes {
     | '/analytics'
     | '/consultants'
     | '/profile'
+    | '/api/ai/smoke'
     | '/api/public/export/zip'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -95,6 +105,7 @@ export interface FileRouteTypes {
     | '/consultants'
     | '/profile'
     | '/'
+    | '/api/ai/smoke'
     | '/api/public/export/zip'
   id:
     | '__root__'
@@ -104,29 +115,31 @@ export interface FileRouteTypes {
     | '/_authenticated/consultants'
     | '/_authenticated/profile'
     | '/_authenticated/'
+    | '/api/ai/smoke'
     | '/api/public/export/zip'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  ApiAiSmokeRoute: typeof ApiAiSmokeRoute
   ApiPublicExportZipRoute: typeof ApiPublicExportZipRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/auth': {
-      id: '/auth'
-      path: '/auth'
-      fullPath: '/auth'
-      preLoaderRoute: typeof AuthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_authenticated': {
       id: '/_authenticated'
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/': {
@@ -136,11 +149,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/profile': {
-      id: '/_authenticated/profile'
-      path: '/profile'
-      fullPath: '/profile'
-      preLoaderRoute: typeof AuthenticatedProfileRouteImport
+    '/_authenticated/analytics': {
+      id: '/_authenticated/analytics'
+      path: '/analytics'
+      fullPath: '/analytics'
+      preLoaderRoute: typeof AuthenticatedAnalyticsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/consultants': {
@@ -150,12 +163,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedConsultantsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/analytics': {
-      id: '/_authenticated/analytics'
-      path: '/analytics'
-      fullPath: '/analytics'
-      preLoaderRoute: typeof AuthenticatedAnalyticsRouteImport
+    '/_authenticated/profile': {
+      id: '/_authenticated/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AuthenticatedProfileRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/api/ai/smoke': {
+      id: '/api/ai/smoke'
+      path: '/api/ai/smoke'
+      fullPath: '/api/ai/smoke'
+      preLoaderRoute: typeof ApiAiSmokeRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/public/export/zip': {
       id: '/api/public/export/zip'
@@ -187,6 +207,7 @@ const AuthenticatedRouteRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  ApiAiSmokeRoute: ApiAiSmokeRoute,
   ApiPublicExportZipRoute: ApiPublicExportZipRoute,
 }
 export const routeTree = rootRouteImport
