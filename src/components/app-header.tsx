@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useSession } from "@/lib/auth";
 import { useCapacityRealtime } from "@/lib/data";
 import { Button } from "@/components/ui/button";
+import { CapacityAssistantLauncher } from "@/components/capacity-assistant";
 
 export function AppHeader() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -29,12 +30,14 @@ export function AppHeader() {
 
   return (
     <header className="sticky top-0 z-20 border-b bg-surface/80 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-6 px-6">
+      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-3 sm:gap-6 sm:px-6">
         <div className="flex items-center gap-2">
           <div className="grid h-8 w-8 place-items-center rounded-lg bg-primary text-primary-foreground text-sm font-bold">
             C
           </div>
-          <span className="text-sm font-semibold tracking-tight">Capacity Board</span>
+          <span className="hidden text-sm font-semibold tracking-tight sm:inline">
+            Capacity Board
+          </span>
         </div>
         <nav className="flex items-center gap-1">
           {links.map(({ to, label, icon: Icon }) => {
@@ -44,7 +47,7 @@ export function AppHeader() {
                 key={to}
                 to={to}
                 className={
-                  "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors " +
+                  "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors sm:px-3 " +
                   (active
                     ? "bg-secondary text-secondary-foreground font-medium"
                     : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground")
@@ -57,6 +60,7 @@ export function AppHeader() {
           })}
         </nav>
         <div className="ml-auto flex items-center gap-2">
+          <CapacityAssistantLauncher />
           {user && (
             <>
               <span className="hidden max-w-[180px] truncate text-xs text-muted-foreground lg:inline">

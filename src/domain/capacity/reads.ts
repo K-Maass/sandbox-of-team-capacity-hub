@@ -71,7 +71,9 @@ export function executeReadAction(action: ReadAction, data: CapacityDataSet) {
     }
 
     case "getConsultant": {
-      const consultant = resolveConsultant(action.consultant, data.consultants);
+      const consultant = resolveConsultant(action.consultant, data.consultants, {
+        field: "consultant",
+      });
       const allocations = data.allocations
         .filter((allocation) => allocation.consultantId === consultant.id)
         .flatMap((allocation) => {
@@ -100,7 +102,9 @@ export function executeReadAction(action: ReadAction, data: CapacityDataSet) {
     }
 
     case "listDemands": {
-      const owner = action.owner ? resolveConsultant(action.owner, data.consultants) : null;
+      const owner = action.owner
+        ? resolveConsultant(action.owner, data.consultants, { field: "owner" })
+        : null;
       const demands = data.demands.filter((demand) => {
         if (!action.includeClosed && demand.status === "Lost") return false;
         if (action.statuses?.length && !action.statuses.includes(demand.status)) return false;
@@ -128,7 +132,7 @@ export function executeReadAction(action: ReadAction, data: CapacityDataSet) {
     }
 
     case "getDemand": {
-      const demand = resolveDemand(action.demand, data.demands);
+      const demand = resolveDemand(action.demand, data.demands, { field: "demand" });
       return {
         demand,
         staffing: getStaffingSnapshot(data, demand),
@@ -158,7 +162,9 @@ export function executeReadAction(action: ReadAction, data: CapacityDataSet) {
     }
 
     case "getCapacity": {
-      const consultant = resolveConsultant(action.consultant, data.consultants);
+      const consultant = resolveConsultant(action.consultant, data.consultants, {
+        field: "consultant",
+      });
       const activeAllocations = activeAllocationDetails(data, consultant.id, action.onDate)
         .filter((item) => action.includePipeline || item.classification === "committed")
         .map((item) => ({
@@ -174,7 +180,7 @@ export function executeReadAction(action: ReadAction, data: CapacityDataSet) {
     }
 
     case "findStaffingCandidates": {
-      const demand = resolveDemand(action.demand, data.demands);
+      const demand = resolveDemand(action.demand, data.demands, { field: "demand" });
       const candidates = data.consultants
         .filter((consultant) => !consultant.archivedAt)
         .map((consultant) => {

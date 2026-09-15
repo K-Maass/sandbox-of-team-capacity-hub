@@ -23,7 +23,7 @@ function consultantCandidate(consultant: ConsultantDto) {
 export function resolveConsultant(
   ref: ConsultantRef,
   consultants: ConsultantDto[],
-  options: { activeOnly?: boolean } = {},
+  options: { activeOnly?: boolean; field?: string } = {},
 ): ConsultantDto {
   const pool = options.activeOnly
     ? consultants.filter((consultant) => !consultant.archivedAt)
@@ -54,6 +54,7 @@ export function resolveConsultant(
   if (matches.length > 1) {
     throw new CapacityActionFailure("AMBIGUOUS_REFERENCE", "Consultant name is ambiguous", {
       candidates: matches.map(consultantCandidate),
+      field: options.field,
     });
   }
   return matches[0];
@@ -67,7 +68,11 @@ function demandCandidate(demand: DemandDto) {
   };
 }
 
-export function resolveDemand(ref: DemandRef, demands: DemandDto[]): DemandDto {
+export function resolveDemand(
+  ref: DemandRef,
+  demands: DemandDto[],
+  options: { field?: string } = {},
+): DemandDto {
   let matches: DemandDto[];
   if ("demandId" in ref) {
     matches = demands.filter((demand) => demand.id === ref.demandId);
@@ -83,6 +88,7 @@ export function resolveDemand(ref: DemandRef, demands: DemandDto[]): DemandDto {
   if (matches.length > 1) {
     throw new CapacityActionFailure("AMBIGUOUS_REFERENCE", "Demand title is ambiguous", {
       candidates: matches.map(demandCandidate),
+      field: options.field,
     });
   }
   return matches[0];
@@ -92,12 +98,15 @@ export function resolveAvailabilityBlock(
   ref: AvailabilityBlockRef,
   blocks: AvailabilityBlockDto[],
   consultants: ConsultantDto[],
+  options: { field?: string } = {},
 ): AvailabilityBlockDto {
   let matches: AvailabilityBlockDto[];
   if ("availabilityBlockId" in ref) {
     matches = blocks.filter((block) => block.id === ref.availabilityBlockId);
   } else {
-    const consultant = resolveConsultant(ref.consultant, consultants);
+    const consultant = resolveConsultant(ref.consultant, consultants, {
+      field: options.field ? `${options.field}.consultant` : undefined,
+    });
     matches = blocks.filter(
       (block) =>
         block.consultantId === consultant.id &&
@@ -113,6 +122,7 @@ export function resolveAvailabilityBlock(
         label: `${block.startDate} to ${block.endDate}`,
         secondary: block.note || undefined,
       })),
+      field: options.field,
     });
   }
   return matches[0];

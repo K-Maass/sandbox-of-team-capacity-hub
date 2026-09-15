@@ -122,13 +122,18 @@ function validateEmailUniqueness(
 function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedAction {
   switch (action.kind) {
     case "updateConsultant": {
-      const consultant = resolveConsultant(action.consultant, data.consultants);
+      const consultant = resolveConsultant(action.consultant, data.consultants, {
+        field: "consultant",
+      });
       validateEmailUniqueness(data, consultant.id, action.patch.email);
       return { kind: action.kind, consultantId: consultant.id, patch: action.patch };
     }
     case "createDemand": {
       const owner = action.demand.owner
-        ? resolveConsultant(action.demand.owner, data.consultants, { activeOnly: true })
+        ? resolveConsultant(action.demand.owner, data.consultants, {
+            activeOnly: true,
+            field: "demand.owner",
+          })
         : null;
       const { owner: _owner, ...demand } = action.demand;
       return {
@@ -137,9 +142,12 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
       };
     }
     case "updateDemand": {
-      const demand = resolveDemand(action.demand, data.demands);
+      const demand = resolveDemand(action.demand, data.demands, { field: "demand" });
       const owner = action.patch.owner
-        ? resolveConsultant(action.patch.owner, data.consultants, { activeOnly: true })
+        ? resolveConsultant(action.patch.owner, data.consultants, {
+            activeOnly: true,
+            field: "patch.owner",
+          })
         : null;
       const { owner: ownerRef, ...patch } = action.patch;
       const resolvedPatch = {
@@ -163,8 +171,9 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
     case "setAllocation": {
       const consultant = resolveConsultant(action.consultant, data.consultants, {
         activeOnly: true,
+        field: "consultant",
       });
-      const demand = resolveDemand(action.demand, data.demands);
+      const demand = resolveDemand(action.demand, data.demands, { field: "demand" });
       const existing = allocationFor(data, consultant.id, demand.id);
       return {
         kind: action.kind,
@@ -175,8 +184,10 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
       };
     }
     case "removeAllocation": {
-      const consultant = resolveConsultant(action.consultant, data.consultants);
-      const demand = resolveDemand(action.demand, data.demands);
+      const consultant = resolveConsultant(action.consultant, data.consultants, {
+        field: "consultant",
+      });
+      const demand = resolveDemand(action.demand, data.demands, { field: "demand" });
       const existing = allocationFor(data, consultant.id, demand.id);
       if (!existing) throw new CapacityActionFailure("NOT_FOUND", "Allocation not found");
       return {
@@ -189,6 +200,7 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
     case "addAvailabilityBlock": {
       const consultant = resolveConsultant(action.consultant, data.consultants, {
         activeOnly: true,
+        field: "consultant",
       });
       const overlaps = data.availabilityBlocks.some(
         (block) =>
@@ -217,6 +229,7 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
         action.block,
         data.availabilityBlocks,
         data.consultants,
+        { field: "block" },
       );
       return { kind: action.kind, availabilityBlockId: block.id };
     }

@@ -15,6 +15,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedAnalyticsRouteImport } from './routes/_authenticated/analytics'
 import { Route as AuthenticatedConsultantsRouteImport } from './routes/_authenticated/consultants'
 import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
+import { Route as ApiAiCapacityRouteImport } from './routes/api/ai/capacity'
 import { Route as ApiAiSmokeRouteImport } from './routes/api/ai/smoke'
 import { Route as ApiCapacityActionsRouteImport } from './routes/api/capacity/actions'
 import { Route as ApiPublicExportZipRouteImport } from './routes/api/public/export/zip'
@@ -49,6 +50,11 @@ const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const ApiAiCapacityRoute = ApiAiCapacityRouteImport.update({
+  id: '/api/ai/capacity',
+  path: '/api/ai/capacity',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAiSmokeRoute = ApiAiSmokeRouteImport.update({
   id: '/api/ai/smoke',
   path: '/api/ai/smoke',
@@ -71,6 +77,7 @@ export interface FileRoutesByFullPath {
   '/analytics': typeof AuthenticatedAnalyticsRoute
   '/consultants': typeof AuthenticatedConsultantsRoute
   '/profile': typeof AuthenticatedProfileRoute
+  '/api/ai/capacity': typeof ApiAiCapacityRoute
   '/api/ai/smoke': typeof ApiAiSmokeRoute
   '/api/capacity/actions': typeof ApiCapacityActionsRoute
   '/api/public/export/zip': typeof ApiPublicExportZipRoute
@@ -81,6 +88,7 @@ export interface FileRoutesByTo {
   '/consultants': typeof AuthenticatedConsultantsRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/': typeof AuthenticatedIndexRoute
+  '/api/ai/capacity': typeof ApiAiCapacityRoute
   '/api/ai/smoke': typeof ApiAiSmokeRoute
   '/api/capacity/actions': typeof ApiCapacityActionsRoute
   '/api/public/export/zip': typeof ApiPublicExportZipRoute
@@ -93,6 +101,7 @@ export interface FileRoutesById {
   '/_authenticated/consultants': typeof AuthenticatedConsultantsRoute
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/api/ai/capacity': typeof ApiAiCapacityRoute
   '/api/ai/smoke': typeof ApiAiSmokeRoute
   '/api/capacity/actions': typeof ApiCapacityActionsRoute
   '/api/public/export/zip': typeof ApiPublicExportZipRoute
@@ -105,6 +114,7 @@ export interface FileRouteTypes {
     | '/analytics'
     | '/consultants'
     | '/profile'
+    | '/api/ai/capacity'
     | '/api/ai/smoke'
     | '/api/capacity/actions'
     | '/api/public/export/zip'
@@ -115,6 +125,7 @@ export interface FileRouteTypes {
     | '/consultants'
     | '/profile'
     | '/'
+    | '/api/ai/capacity'
     | '/api/ai/smoke'
     | '/api/capacity/actions'
     | '/api/public/export/zip'
@@ -126,6 +137,7 @@ export interface FileRouteTypes {
     | '/_authenticated/consultants'
     | '/_authenticated/profile'
     | '/_authenticated/'
+    | '/api/ai/capacity'
     | '/api/ai/smoke'
     | '/api/capacity/actions'
     | '/api/public/export/zip'
@@ -134,6 +146,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  ApiAiCapacityRoute: typeof ApiAiCapacityRoute
   ApiAiSmokeRoute: typeof ApiAiSmokeRoute
   ApiCapacityActionsRoute: typeof ApiCapacityActionsRoute
   ApiPublicExportZipRoute: typeof ApiPublicExportZipRoute
@@ -183,6 +196,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfileRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/ai/capacity': {
+      id: '/api/ai/capacity'
+      path: '/api/ai/capacity'
+      fullPath: '/api/ai/capacity'
+      preLoaderRoute: typeof ApiAiCapacityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/ai/smoke': {
       id: '/api/ai/smoke'
       path: '/api/ai/smoke'
@@ -227,6 +247,7 @@ const AuthenticatedRouteRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  ApiAiCapacityRoute: ApiAiCapacityRoute,
   ApiAiSmokeRoute: ApiAiSmokeRoute,
   ApiCapacityActionsRoute: ApiCapacityActionsRoute,
   ApiPublicExportZipRoute: ApiPublicExportZipRoute,
