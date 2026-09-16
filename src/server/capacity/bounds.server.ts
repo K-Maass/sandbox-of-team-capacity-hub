@@ -6,6 +6,7 @@ export const CAPACITY_ASSISTANT_BOUNDS = {
   maxRequestBytes: 32 * 1024,
   maxMessageChars: 4_000,
   maxContextBytes: 16 * 1024,
+  maxPendingClarificationBytes: 8 * 1024,
   maxProviderResponseBytes: 512 * 1024,
   maxProviderArgumentsChars: 16_384,
   providerTimeoutMs: 30_000,

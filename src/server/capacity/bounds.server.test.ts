@@ -12,4 +12,5 @@ test("assistant limits are centralized and bounded", () => {
   expect(CAPACITY_ASSISTANT_BOUNDS.maxActionPlanItems).toBe(5);
   expect(CAPACITY_ASSISTANT_BOUNDS.maxActionPlanDependencyDepth).toBe(5);
   expect(CAPACITY_ASSISTANT_BOUNDS.maxContextBytes).toBe(16 * 1024);
+  expect(CAPACITY_ASSISTANT_BOUNDS.maxPendingClarificationBytes).toBe(8 * 1024);
 });

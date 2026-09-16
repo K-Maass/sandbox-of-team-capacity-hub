@@ -13,6 +13,8 @@ import type {
   ConversationContext,
 } from "@/domain/capacity/assistant";
 import { clarificationFieldSchema, conversationContextSchema } from "@/domain/capacity/assistant";
+import type { PendingClarification } from "@/domain/capacity/assistant-clarification";
+import type { SemanticOutcome } from "@/domain/capacity/assistant-semantic";
 import type {
   ActionPreview,
   ActionResult,
@@ -29,6 +31,12 @@ import { CapacityActionFailure } from "@/domain/capacity/errors";
 import { resolveConsultant, resolveDemand } from "@/domain/capacity/resolution";
 import { normalizeSkills } from "@/domain/capacity/form-validation";
 import { executeCapacityAction, type CapacityActionResponse } from "./actions.server";
+import {
+  clearPendingClarification,
+  reconcilePendingClarification,
+  revalidatePendingClarification,
+  retainPendingClarification,
+} from "./assistant-clarification.server";
 import type { CapacityRepository } from "./repository";
 import { CAPACITY_ASSISTANT_BOUNDS } from "./bounds.server";
 
@@ -666,6 +674,19 @@ function errorResponse(
     currentDate,
     ...(context ? { context } : {}),
   };
+}
+
+function withPendingClarification(
+  response: AssistantResponse,
+  pendingClarification: PendingClarification | null,
+): AssistantResponse {
+  return { ...response, pendingClarification };
+}
+
+function pendingClarificationErrorMessage(error: string): string {
+  return error === "PENDING_CLARIFICATION_TOO_LARGE"
+    ? "Pending clarification state is too large. Please start the request again."
+    : "Pending clarification state is invalid. Please start the request again.";
 }
 
 function buildConversationContext(
@@ -1743,31 +1764,89 @@ export async function handleCapacityAssistant(
   request: AssistantRequest,
   repository: CapacityRepository,
   actorUserId: string,
-  options: { signal?: AbortSignal; currentDate?: string; interpret?: Interpreter } = {},
+  options: {
+    signal?: AbortSignal;
+    currentDate?: string;
+    interpret?: Interpreter;
+    semanticOutcome?: SemanticOutcome;
+  } = {},
 ): Promise<AssistantResponse> {
   const currentDate = options.currentDate ?? todayIsoDate();
+  if (request.mode === "confirm") {
+    return confirm(request, repository, actorUserId, currentDate);
+  }
+  const pendingState = revalidatePendingClarification(request.pendingClarification);
+  if (!pendingState.ok) {
+    return withPendingClarification(
+      errorResponse(
+        pendingState.error,
+        pendingClarificationErrorMessage(pendingState.error),
+        currentDate,
+      ),
+      null,
+    );
+  }
+  const pendingClarification = pendingState.pending;
+  const finish = (response: AssistantResponse) => {
+    const nextPending =
+      response.ok && response.kind === "clarification"
+        ? retainPendingClarification(pendingClarification)
+        : clearPendingClarification();
+    return withPendingClarification(response, nextPending);
+  };
   const currentData = await repository.load();
   let validatedContext: ConversationContext | undefined;
   try {
-    validatedContext = validateConversationContext(
-      request.mode === "confirm" ? undefined : request.context,
-      currentData,
-    );
+    validatedContext = validateConversationContext(request.context, currentData);
   } catch (error) {
     if (error instanceof CapacityActionFailure) {
-      return errorResponse("CONTEXT_INVALIDATED", error.detail.message, currentDate, true, {});
+      return finish(
+        errorResponse("CONTEXT_INVALIDATED", error.detail.message, currentDate, true, {}),
+      );
     }
     throw error;
   }
-  if (request.mode === "confirm") return confirm(request, repository, actorUserId, currentDate);
+  if (options.semanticOutcome) {
+    const reconciled = reconcilePendingClarification(pendingClarification, options.semanticOutcome);
+    if (!reconciled.ok) {
+      return withPendingClarification(
+        errorResponse(
+          reconciled.error,
+          pendingClarificationErrorMessage(reconciled.error),
+          currentDate,
+        ),
+        null,
+      );
+    }
+    if (options.semanticOutcome.type === "clarification" && reconciled.pending) {
+      return {
+        ok: true,
+        kind: "semantic_clarification",
+        message: options.semanticOutcome.question,
+        pendingClarification: reconciled.pending,
+        currentDate,
+        context: validatedContext,
+      };
+    }
+    return withPendingClarification(
+      errorResponse(
+        "SEMANTIC_OUTCOME_NOT_ROUTED",
+        "This semantic assistant outcome is not routed by the current handler yet.",
+        currentDate,
+      ),
+      reconciled.pending,
+    );
+  }
   if (request.mode === "clarify") {
-    return clarify(
-      request.intent,
-      request.selections,
-      repository,
-      actorUserId,
-      currentDate,
-      validatedContext,
+    return finish(
+      await clarify(
+        request.intent,
+        request.selections,
+        repository,
+        actorUserId,
+        currentDate,
+        validatedContext,
+      ),
     );
   }
 
@@ -1781,14 +1860,14 @@ export async function handleCapacityAssistant(
     currentData.consultants.map((consultant) => fullName(consultant)),
   );
   if (intent.type === "unsupported") {
-    return {
+    return finish({
       ok: true,
       kind: "unsupported",
       message: unsupportedMessage(intent.reason),
       reason: intent.reason,
       currentDate,
       context: validatedContext,
-    };
+    });
   }
   let preparedIntent: PreparedIntent;
   try {
@@ -1802,8 +1881,8 @@ export async function handleCapacityAssistant(
         currentDate,
         validatedContext,
       );
-      if (clarification) return clarification;
-      return errorResponse(error.detail.code, error.detail.message, currentDate);
+      if (clarification) return finish(clarification);
+      return finish(errorResponse(error.detail.code, error.detail.message, currentDate));
     }
     throw error;
   }
@@ -1812,13 +1891,15 @@ export async function handleCapacityAssistant(
     repository,
     actorUserId,
   );
-  return presentActionable(
-    preparedIntent.intent,
-    intent,
-    [],
-    result,
-    repository,
-    currentDate,
-    validatedContext,
+  return finish(
+    await presentActionable(
+      preparedIntent.intent,
+      intent,
+      [],
+      result,
+      repository,
+      currentDate,
+      validatedContext,
+    ),
   );
 }

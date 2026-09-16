@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import type { ActionPreview, CapacityDataSet, ResolvedAction } from "@/domain/capacity/contracts";
-import type { CapacityIntent } from "@/domain/capacity/assistant";
+import { assistantRequestSchema, type CapacityIntent } from "@/domain/capacity/assistant";
+import { semanticOutcomeSchema } from "@/domain/capacity/assistant-semantic";
 import { handleCapacityAssistant } from "./assistant.server";
 import type { CapacityRepository, RepositoryMutation } from "./repository";
 
@@ -60,8 +61,10 @@ function fixture(): CapacityDataSet {
 class MemoryRepository implements CapacityRepository {
   data = fixture();
   applyCount = 0;
+  loadCount = 0;
 
   async load() {
+    this.loadCount++;
     return structuredClone(this.data);
   }
 
@@ -95,11 +98,196 @@ class MemoryRepository implements CapacityRepository {
 
 const interpreter = (intent: CapacityIntent) => async () => intent;
 
+const PENDING_CLARIFICATION = {
+  intentFamily: "create_consultant" as const,
+  knownFacts: { name: "Anna" },
+  missing: ["surname", "level", "role"] as const,
+  question: "What surname, level, and role should Anna have?",
+  reason: "A consultant needs the remaining profile fields before creation.",
+};
+
 describe("Capacity assistant orchestration", () => {
   let repository: MemoryRepository;
 
   beforeEach(() => {
     repository = new MemoryRepository();
+  });
+
+  test("request schema accepts bounded pending state for interpret and clarify only", () => {
+    const interpret = assistantRequestSchema.parse({
+      mode: "interpret",
+      message: "Continue",
+      pendingClarification: PENDING_CLARIFICATION,
+    });
+    expect(interpret).toMatchObject({ pendingClarification: PENDING_CLARIFICATION });
+
+    const clarify = assistantRequestSchema.parse({
+      mode: "clarify",
+      intent: {
+        type: "read",
+        action: {
+          kind: "getConsultant",
+          consultant: { name: "Anna" },
+          includePipeline: false,
+        },
+        presentation: "default",
+      },
+      selections: [{ field: "consultant", candidateId: ANNA }],
+      pendingClarification: PENDING_CLARIFICATION,
+    });
+    expect(clarify).toMatchObject({ pendingClarification: PENDING_CLARIFICATION });
+
+    expect(
+      assistantRequestSchema.safeParse({
+        mode: "interpret",
+        message: "Continue",
+        pendingClarification: { ...PENDING_CLARIFICATION, previewId: "a".repeat(64) },
+      }).success,
+    ).toBe(false);
+    expect(
+      assistantRequestSchema.safeParse({
+        mode: "confirm",
+        confirmed: true,
+        action: {
+          kind: "updateConsultant",
+          consultant: { consultantId: ANNA },
+          patch: { role: "Data" },
+        },
+        asOfDate: "2026-09-15",
+        previewId: "a".repeat(64),
+        pendingClarification: PENDING_CLARIFICATION,
+      }).success,
+    ).toBe(false);
+  });
+
+  test("handler revalidates pending state and returns its cleared result", async () => {
+    const response = await handleCapacityAssistant(
+      {
+        mode: "interpret",
+        message: "Who has capacity?",
+        pendingClarification: PENDING_CLARIFICATION,
+      },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: interpreter({
+          type: "read",
+          action: {
+            kind: "listConsultants",
+            status: "active",
+            onDate: "2026-09-15",
+            includePipeline: false,
+          },
+          presentation: "default",
+        }),
+      },
+    );
+    expect(response).toMatchObject({ ok: true, kind: "read", pendingClarification: null });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("semantic clarification creates pending state through the real handler seam", async () => {
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "Add Anna" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        semanticOutcome: semanticOutcomeSchema.parse({
+          type: "clarification",
+          intentFamily: "create_consultant",
+          knownFacts: { name: "Anna" },
+          missing: ["surname", "level", "role"],
+          question: "What surname, level, and role should Anna have?",
+          reason: "A consultant needs the remaining profile fields before creation.",
+        }),
+      },
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      kind: "semantic_clarification",
+      pendingClarification: PENDING_CLARIFICATION,
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("semantic clarification replaces pending state and help retains it", async () => {
+    const replacementPending = {
+      intentFamily: "create_consultant" as const,
+      knownFacts: { name: "Anna", surname: "Able" },
+      missing: ["level", "role"] as const,
+      question: "What level and role should Anna have?",
+      reason: "The name and surname are known; the remaining profile fields are required.",
+    };
+    const replacement = semanticOutcomeSchema.parse({
+      type: "clarification",
+      intentFamily: "create_consultant",
+      knownFacts: replacementPending.knownFacts,
+      missing: replacementPending.missing,
+      question: replacementPending.question,
+      reason: replacementPending.reason,
+    });
+    const replaced = await handleCapacityAssistant(
+      {
+        mode: "interpret",
+        message: "Anna Able",
+        pendingClarification: PENDING_CLARIFICATION,
+      },
+      repository,
+      ACTOR,
+      { currentDate: "2026-09-15", semanticOutcome: replacement },
+    );
+    expect(replaced).toMatchObject({
+      ok: true,
+      kind: "semantic_clarification",
+      pendingClarification: replacementPending,
+    });
+
+    const retained = await handleCapacityAssistant(
+      {
+        mode: "interpret",
+        message: "Can you explain the clarification?",
+        pendingClarification: replacementPending,
+      },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        semanticOutcome: semanticOutcomeSchema.parse({
+          type: "conversation_or_help",
+          topic: "clarification",
+        }),
+      },
+    );
+    expect(retained).toMatchObject({
+      ok: false,
+      error: { code: "SEMANTIC_OUTCOME_NOT_ROUTED" },
+      pendingClarification: replacementPending,
+    });
+  });
+
+  test("handler rejects tampered pending state before action execution", async () => {
+    const tamperedRequest = {
+      mode: "interpret" as const,
+      message: "Continue",
+      pendingClarification: { ...PENDING_CLARIFICATION, previewId: "a".repeat(64) },
+    };
+    // @ts-expect-error -- deliberately exercises the runtime trust boundary with tampered input.
+    const response = await handleCapacityAssistant(tamperedRequest, repository, ACTOR, {
+      currentDate: "2026-09-15",
+      interpret: interpreter({
+        type: "unsupported",
+        reason: "outside_capacity_hub",
+      }),
+    });
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_PENDING_CLARIFICATION" },
+      pendingClarification: null,
+    });
+    expect(repository.loadCount).toBe(0);
+    expect(repository.applyCount).toBe(0);
   });
 
   test("executes deterministic reads and filters available consultants", async () => {
@@ -203,12 +391,21 @@ describe("Capacity assistant orchestration", () => {
       asOfDate: "2026-09-15",
     } as const;
     const first = await handleCapacityAssistant(
-      { mode: "interpret", message: "Assign Alex" },
+      {
+        mode: "interpret",
+        message: "Assign Alex",
+        pendingClarification: PENDING_CLARIFICATION,
+      },
       repository,
       ACTOR,
       { currentDate: "2026-09-15", interpret: interpreter(intent) },
     );
-    expect(first).toMatchObject({ ok: true, kind: "clarification", field: "consultant" });
+    expect(first).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      field: "consultant",
+      pendingClarification: PENDING_CLARIFICATION,
+    });
     if (!first.ok || first.kind !== "clarification") throw new Error("Expected clarification");
 
     const chosen = await handleCapacityAssistant(
@@ -216,12 +413,13 @@ describe("Capacity assistant orchestration", () => {
         mode: "clarify",
         intent: first.intent,
         selections: [{ field: first.field, candidateId: ALEX_ONE }],
+        pendingClarification: PENDING_CLARIFICATION,
       },
       repository,
       ACTOR,
       { currentDate: "2026-09-15" },
     );
-    expect(chosen).toMatchObject({ ok: true, kind: "preview" });
+    expect(chosen).toMatchObject({ ok: true, kind: "preview", pendingClarification: null });
     expect(repository.applyCount).toBe(0);
 
     const tampered = await handleCapacityAssistant(
@@ -276,7 +474,11 @@ describe("Capacity assistant orchestration", () => {
 
   test("unsupported intent cannot reach the repository mutation path", async () => {
     const response = await handleCapacityAssistant(
-      { mode: "interpret", message: "Delete everyone" },
+      {
+        mode: "interpret",
+        message: "Delete everyone",
+        pendingClarification: PENDING_CLARIFICATION,
+      },
       repository,
       ACTOR,
       {
@@ -284,7 +486,7 @@ describe("Capacity assistant orchestration", () => {
         interpret: interpreter({ type: "unsupported", reason: "destructive_action" }),
       },
     );
-    expect(response).toMatchObject({ ok: true, kind: "unsupported" });
+    expect(response).toMatchObject({ ok: true, kind: "unsupported", pendingClarification: null });
     expect(repository.applyCount).toBe(0);
   });
 
@@ -486,6 +688,7 @@ describe("Capacity assistant orchestration", () => {
       {
         mode: "interpret",
         message: "Why?",
+        pendingClarification: PENDING_CLARIFICATION,
         context: {
           scope: "consultant",
           lastConsultant: { id: ALEX_ONE, label: "Wrong Alex", disambiguator: "stale@example.com" },
@@ -515,6 +718,7 @@ describe("Capacity assistant orchestration", () => {
       context: {
         lastConsultant: { id: ALEX_ONE, label: "Alex Meyer", disambiguator: "alex@example.com" },
       },
+      pendingClarification: null,
     });
   });
 
@@ -523,6 +727,7 @@ describe("Capacity assistant orchestration", () => {
       {
         mode: "interpret",
         message: "Why?",
+        pendingClarification: PENDING_CLARIFICATION,
         context: {
           scope: "consultant",
           lastConsultant: { id: "99999999-9999-4999-8999-999999999999", label: "Alex Smith" },
@@ -543,6 +748,7 @@ describe("Capacity assistant orchestration", () => {
       ok: false,
       error: { code: "CONTEXT_INVALIDATED" },
       context: {},
+      pendingClarification: null,
     });
   });
 });

@@ -8,6 +8,7 @@ import type {
   ProposedAction,
   ReadAction,
 } from "./contracts";
+import { pendingClarificationSchema, type PendingClarification } from "./assistant-clarification";
 import { dateRangeSchema } from "./assistant-context";
 import { isoDateSchema, proposedActionSchema, readActionSchema, uuidSchema } from "./validation";
 
@@ -185,6 +186,7 @@ export const assistantRequestSchema = z.discriminatedUnion("mode", [
       mode: z.literal("interpret"),
       message: z.string().trim().min(1).max(4_000),
       context: conversationContextSchema.optional(),
+      pendingClarification: pendingClarificationSchema.optional(),
     })
     .strict(),
   z
@@ -193,6 +195,7 @@ export const assistantRequestSchema = z.discriminatedUnion("mode", [
       intent: actionableCapacityIntentSchema,
       selections: z.array(clarificationSelectionSchema).min(1).max(4),
       context: conversationContextSchema.optional(),
+      pendingClarification: pendingClarificationSchema.optional(),
     })
     .strict(),
   z
@@ -231,12 +234,18 @@ export type ConversationContext = {
   explainFocus?: "free" | "committed" | "pipeline" | "utilization" | "allocations";
 };
 export type AssistantRequest =
-  | { mode: "interpret"; message: string; context?: ConversationContext }
+  | {
+      mode: "interpret";
+      message: string;
+      context?: ConversationContext;
+      pendingClarification?: PendingClarification;
+    }
   | {
       mode: "clarify";
       intent: ActionableCapacityIntent;
       selections: ClarificationSelection[];
       context?: ConversationContext;
+      pendingClarification?: PendingClarification;
     }
   | {
       mode: "confirm";
@@ -247,6 +256,10 @@ export type AssistantRequest =
     };
 
 export type AssistantCandidate = { id: string; label: string; secondary?: string };
+
+type PendingClarificationResponse = {
+  pendingClarification?: PendingClarification | null;
+};
 
 export type AssistantPersonRow = {
   id: string;
@@ -383,15 +396,15 @@ export type AssistantSuccess = {
 };
 
 export type AssistantResponse =
-  | {
+  | (PendingClarificationResponse & {
       ok: true;
       kind: "read";
       message: string;
       details: AssistantReadDetails;
       currentDate: string;
       context?: ConversationContext;
-    }
-  | {
+    })
+  | (PendingClarificationResponse & {
       ok: true;
       kind: "preview";
       message: string;
@@ -399,8 +412,8 @@ export type AssistantResponse =
       preview: AssistantPreview;
       currentDate: string;
       context?: ConversationContext;
-    }
-  | {
+    })
+  | (PendingClarificationResponse & {
       ok: true;
       kind: "clarification";
       message: string;
@@ -410,29 +423,36 @@ export type AssistantResponse =
       selections: ClarificationSelection[];
       currentDate: string;
       context?: ConversationContext;
-    }
-  | {
+    })
+  | (PendingClarificationResponse & {
+      ok: true;
+      kind: "semantic_clarification";
+      message: string;
+      currentDate: string;
+      context?: ConversationContext;
+    })
+  | (PendingClarificationResponse & {
       ok: true;
       kind: "unsupported";
       message: string;
       reason: z.infer<typeof unsupportedReasonSchema>;
       currentDate: string;
       context?: ConversationContext;
-    }
-  | {
+    })
+  | (PendingClarificationResponse & {
       ok: true;
       kind: "executed";
       success: AssistantSuccess;
       currentDate: string;
       context?: ConversationContext;
-    }
-  | {
+    })
+  | (PendingClarificationResponse & {
       ok: false;
       error: { code: string; message: string; retryable?: boolean };
       replacement?: { action: ProposedAction; preview: AssistantPreview };
       currentDate?: string;
       context?: ConversationContext;
-    };
+    });
 
 export function isReadIntent(
   intent: ActionableCapacityIntent,
