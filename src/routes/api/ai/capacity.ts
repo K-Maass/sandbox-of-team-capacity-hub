@@ -122,6 +122,7 @@ export const Route = createFileRoute("/api/ai/capacity")({
           const result = await handleCapacityAssistant(parsed.data, repository, context.userId, {
             signal: request.signal,
             useV2Reads: parsed.data.mode === "interpret",
+            useV2Writes: parsed.data.mode === "interpret",
           });
           return response(result, result.ok ? 200 : statusFor(result.error.code));
         } catch (error) {

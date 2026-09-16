@@ -550,6 +550,7 @@ function resolvedDemandFields(
   fields: Extract<SemanticWriteAction, { kind: "createDemand" }>["demand"],
   options: ValidatedOptions,
   field: string,
+  preserveAmbiguousNames = false,
 ) {
   return {
     title: fields.title,
@@ -568,7 +569,9 @@ function resolvedDemandFields(
     ...(fields.owner !== undefined
       ? {
           owner:
-            fields.owner === null ? null : consultantRef(fields.owner, options, `${field}.owner`),
+            fields.owner === null
+              ? null
+              : consultantRef(fields.owner, options, `${field}.owner`, preserveAmbiguousNames),
         }
       : {}),
   };
@@ -577,6 +580,7 @@ function resolvedDemandFields(
 function resolvedDemandPatch(
   patch: Extract<SemanticWriteAction, { kind: "updateDemand" }>["patch"],
   options: ValidatedOptions,
+  preserveAmbiguousNames = false,
 ) {
   return {
     ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -593,7 +597,12 @@ function resolvedDemandPatch(
       : {}),
     ...(patch.requiredCapacity !== undefined ? { requiredCapacity: patch.requiredCapacity } : {}),
     ...(patch.owner !== undefined
-      ? { owner: patch.owner === null ? null : consultantRef(patch.owner, options, "patch.owner") }
+      ? {
+          owner:
+            patch.owner === null
+              ? null
+              : consultantRef(patch.owner, options, "patch.owner", preserveAmbiguousNames),
+        }
       : {}),
   };
 }
@@ -619,6 +628,7 @@ function writeIntent(action: ProposedAction, currentDate: string): ActionableCap
 function compileWrite(
   action: SemanticWriteAction,
   options: ValidatedOptions,
+  preserveAmbiguousNames = false,
 ): ActionableCapacityIntent {
   switch (action.kind) {
     case "createConsultant":
@@ -627,22 +637,30 @@ function compileWrite(
       return writeIntent(
         {
           kind: action.kind,
-          consultant: consultantRef(action.consultant, options, "consultant"),
+          consultant: consultantRef(
+            action.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
           patch: action.patch,
         },
         options.currentDate,
       );
     case "createDemand":
       return writeIntent(
-        { kind: action.kind, demand: resolvedDemandFields(action.demand, options, "demand") },
+        {
+          kind: action.kind,
+          demand: resolvedDemandFields(action.demand, options, "demand", preserveAmbiguousNames),
+        },
         options.currentDate,
       );
     case "updateDemand":
       return writeIntent(
         {
           kind: action.kind,
-          demand: demandRef(action.demand, options, "demand"),
-          patch: resolvedDemandPatch(action.patch, options),
+          demand: demandRef(action.demand, options, "demand", preserveAmbiguousNames),
+          patch: resolvedDemandPatch(action.patch, options, preserveAmbiguousNames),
         },
         options.currentDate,
       );
@@ -650,8 +668,13 @@ function compileWrite(
       return writeIntent(
         {
           kind: action.kind,
-          consultant: consultantRef(action.consultant, options, "consultant"),
-          demand: demandRef(action.demand, options, "demand"),
+          consultant: consultantRef(
+            action.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
+          demand: demandRef(action.demand, options, "demand", preserveAmbiguousNames),
           capacity: action.capacity,
         },
         options.currentDate,
@@ -660,8 +683,13 @@ function compileWrite(
       return writeIntent(
         {
           kind: action.kind,
-          consultant: consultantRef(action.consultant, options, "consultant"),
-          demand: demandRef(action.demand, options, "demand"),
+          consultant: consultantRef(
+            action.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
+          demand: demandRef(action.demand, options, "demand", preserveAmbiguousNames),
         },
         options.currentDate,
       );
@@ -669,7 +697,12 @@ function compileWrite(
       return writeIntent(
         {
           kind: action.kind,
-          consultant: consultantRef(action.consultant, options, "consultant"),
+          consultant: consultantRef(
+            action.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
           startDate: resolvePoint(action.startDate, options, "startDate"),
           endDate: resolvePoint(action.endDate, options, "endDate"),
           note: action.note,
@@ -677,8 +710,21 @@ function compileWrite(
         options.currentDate,
       );
     case "removeAvailabilityBlock": {
-      const consultant = consultantRef(action.block.consultant, options, "block.consultant");
+      const consultant = consultantRef(
+        action.block.consultant,
+        options,
+        "block.consultant",
+        preserveAmbiguousNames,
+      );
+      const startDate = resolvePoint(action.block.startDate, options, "block.startDate");
+      const endDate = resolvePoint(action.block.endDate, options, "block.endDate");
       if (!("consultantId" in consultant)) {
+        if (preserveAmbiguousNames) {
+          return writeIntent(
+            { kind: action.kind, block: { consultant, startDate, endDate } },
+            options.currentDate,
+          );
+        }
         throw new CapacityActionFailure(
           "VALIDATION_ERROR",
           "Consultant reference was not resolved",
@@ -687,8 +733,6 @@ function compileWrite(
           },
         );
       }
-      const startDate = resolvePoint(action.block.startDate, options, "block.startDate");
-      const endDate = resolvePoint(action.block.endDate, options, "block.endDate");
       const block = options.data.availabilityBlocks.find(
         (item) =>
           item.consultantId === consultant.consultantId &&
@@ -711,6 +755,7 @@ function compileRelativeWrite(
   operation: SemanticRelativeWriteOperation,
   asOf: SemanticPointTimeRef,
   options: ValidatedOptions,
+  preserveAmbiguousNames = false,
 ): ActionableCapacityIntent {
   const common = { type: "relativeWrite" as const, asOfDate: resolvePoint(asOf, options, "asOf") };
   switch (operation.kind) {
@@ -719,7 +764,12 @@ function compileRelativeWrite(
         ...common,
         operation: {
           ...operation,
-          consultant: consultantRef(operation.consultant, options, "consultant"),
+          consultant: consultantRef(
+            operation.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
         },
       });
     case "adjustAllocation":
@@ -727,21 +777,34 @@ function compileRelativeWrite(
         ...common,
         operation: {
           ...operation,
-          consultant: consultantRef(operation.consultant, options, "consultant"),
-          demand: demandRef(operation.demand, options, "demand"),
+          consultant: consultantRef(
+            operation.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
+          demand: demandRef(operation.demand, options, "demand", preserveAmbiguousNames),
         },
       });
     case "adjustDemandCapacity":
       return actionableCapacityIntentSchema.parse({
         ...common,
-        operation: { ...operation, demand: demandRef(operation.demand, options, "demand") },
+        operation: {
+          ...operation,
+          demand: demandRef(operation.demand, options, "demand", preserveAmbiguousNames),
+        },
       });
     case "changeConsultantSkill":
       return actionableCapacityIntentSchema.parse({
         ...common,
         operation: {
           ...operation,
-          consultant: consultantRef(operation.consultant, options, "consultant"),
+          consultant: consultantRef(
+            operation.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
         },
       });
     case "updateConsultantProfile":
@@ -749,7 +812,12 @@ function compileRelativeWrite(
         ...common,
         operation: {
           ...operation,
-          consultant: consultantRef(operation.consultant, options, "consultant"),
+          consultant: consultantRef(
+            operation.consultant,
+            options,
+            "consultant",
+            preserveAmbiguousNames,
+          ),
         },
       });
   }
@@ -776,6 +844,22 @@ export function compileSemanticOutcome(
   if (outcome.type === "read") return compileRead(outcome.action, validated, outcome.presentation);
   if (outcome.type === "write") return compileWrite(outcome.action, validated);
   return compileRelativeWrite(outcome.operation, outcome.asOf, validated);
+}
+
+/** Build a write intent while retaining ambiguous names for the existing candidate flow. */
+export function compileSemanticActionForClarification(
+  input: SemanticOutcome,
+  options: SemanticCompilerOptions,
+): ActionableCapacityIntent {
+  const outcome = semanticOutcomeSchema.parse(input);
+  const validated = validateOptions(options);
+  if (outcome.type === "write") return compileWrite(outcome.action, validated, true);
+  if (outcome.type === "relativeWrite")
+    return compileRelativeWrite(outcome.operation, outcome.asOf, validated, true);
+  throw new CapacityActionFailure(
+    "VALIDATION_ERROR",
+    "Only a write outcome can enter the write clarification flow",
+  );
 }
 
 /** Safe adapter for callers that want typed resolution failures instead of exceptions. */

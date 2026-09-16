@@ -36,6 +36,7 @@ import { normalizeSkills } from "@/domain/capacity/form-validation";
 import { executeCapacityAction, type CapacityActionResponse } from "./actions.server";
 import {
   compileSemanticOutcome,
+  compileSemanticActionForClarification,
   compileSemanticReadForClarification,
   type SemanticCompilerOptions,
   type SemanticCompilerOutput,
@@ -77,6 +78,8 @@ const V2_READ_CUTOVER_FAILURE_MESSAGE =
   "The Luna V2 read cutover could not compile this read safely. V1 fallback is not available.";
 const V2_WRITE_CUTOVER_MESSAGE =
   "Luna V2 write interpretation is not cut over yet. No preview or mutation was created.";
+const V2_WRITE_CUTOVER_FAILURE_MESSAGE =
+  "The Luna V2 write cutover could not compile this change safely. No preview or mutation was created.";
 
 type ConsultantReadRow = { consultant: ConsultantDto; capacity: CapacitySnapshot | null };
 type DemandReadRow = { demand: DemandDto; staffing: StaffingSnapshot };
@@ -1828,6 +1831,7 @@ function routeSemanticNonReadOutcome(
   currentDate: string,
   context: ConversationContext | undefined,
   reconciledPending: PendingClarification | null,
+  allowWrites: boolean,
 ): AssistantResponse | null {
   if (outcome.type === "clarification") {
     return withPendingClarification(
@@ -1881,6 +1885,7 @@ function routeSemanticNonReadOutcome(
     );
   }
   if (outcome.type === "write" || outcome.type === "relativeWrite") {
+    if (allowWrites) return null;
     return withPendingClarification(
       errorResponse(
         "V2_WRITE_CUTOVER_NOT_READY",
@@ -1895,7 +1900,7 @@ function routeSemanticNonReadOutcome(
   return null;
 }
 
-async function handleV2ReadCutover(
+async function handleV2Cutover(
   request: Extract<AssistantRequest, { mode: "interpret" }>,
   repository: CapacityRepository,
   actorUserId: string,
@@ -1908,6 +1913,7 @@ async function handleV2ReadCutover(
     signal?: AbortSignal;
     interpretV2?: V2Interpreter;
     compileV2?: V2Compiler;
+    allowWrites?: boolean;
   },
 ): Promise<AssistantResponse> {
   const interpretV2 = options.interpretV2 ?? interpretCapacityMessageV2;
@@ -1934,6 +1940,7 @@ async function handleV2ReadCutover(
     currentDate,
     validatedContext,
     reconciled.pending,
+    options.allowWrites === true,
   );
   if (nonReadResponse) return nonReadResponse;
 
@@ -1947,7 +1954,21 @@ async function handleV2ReadCutover(
   let intent: ActionableCapacityIntent;
   try {
     const compiled = compileV2(outcome, compilerOptions);
-    if (compiled.type !== "read") {
+    if (compiled.type === "unsupported") {
+      return finish({
+        ok: true,
+        kind: "unsupported",
+        message: unsupportedMessage(compiled.reason),
+        reason: compiled.reason,
+        currentDate,
+        context: validatedContext,
+      });
+    }
+    if (
+      compiled.type === "clarification" ||
+      compiled.type === "multiple_changes" ||
+      compiled.type === "conversation_or_help"
+    ) {
       return finish(
         errorResponse(
           "V2_READ_CUTOVER_UNSUPPORTED",
@@ -1958,11 +1979,25 @@ async function handleV2ReadCutover(
         ),
       );
     }
+    if (compiled.type !== "read" && options.allowWrites !== true) {
+      return finish(
+        errorResponse(
+          "V2_WRITE_CUTOVER_NOT_READY",
+          V2_WRITE_CUTOVER_MESSAGE,
+          currentDate,
+          false,
+          validatedContext,
+        ),
+      );
+    }
     intent = compiled;
   } catch (error) {
     if (error instanceof CapacityActionFailure && error.detail.code === "AMBIGUOUS_REFERENCE") {
       try {
-        const clarificationIntent = compileSemanticReadForClarification(outcome, compilerOptions);
+        const clarificationIntent =
+          outcome.type === "read"
+            ? compileSemanticReadForClarification(outcome, compilerOptions)
+            : compileSemanticActionForClarification(outcome, compilerOptions);
         const clarification = clarificationFromFailure(
           error,
           clarificationIntent,
@@ -1976,10 +2011,13 @@ async function handleV2ReadCutover(
         // cannot be constructed from the same authoritative snapshot.
       }
     }
+    const isWriteCutover =
+      options.allowWrites === true &&
+      (outcome.type === "write" || outcome.type === "relativeWrite");
     return finish(
       errorResponse(
-        "V2_READ_CUTOVER_COMPILE_FAILED",
-        V2_READ_CUTOVER_FAILURE_MESSAGE,
+        isWriteCutover ? "V2_WRITE_CUTOVER_COMPILE_FAILED" : "V2_READ_CUTOVER_COMPILE_FAILED",
+        isWriteCutover ? V2_WRITE_CUTOVER_FAILURE_MESSAGE : V2_READ_CUTOVER_FAILURE_MESSAGE,
         currentDate,
         true,
         validatedContext,
@@ -2001,10 +2039,12 @@ async function handleV2ReadCutover(
       );
       if (clarification) return finish(clarification);
     }
+    const writeFailure =
+      options.allowWrites === true && (intent.type === "write" || intent.type === "relativeWrite");
     return finish(
       errorResponse(
-        "V2_READ_CUTOVER_COMPILE_FAILED",
-        V2_READ_CUTOVER_FAILURE_MESSAGE,
+        writeFailure ? "V2_WRITE_CUTOVER_COMPILE_FAILED" : "V2_READ_CUTOVER_COMPILE_FAILED",
+        writeFailure ? V2_WRITE_CUTOVER_FAILURE_MESSAGE : V2_READ_CUTOVER_FAILURE_MESSAGE,
         currentDate,
         true,
         validatedContext,
@@ -2039,6 +2079,7 @@ export async function handleCapacityAssistant(
     interpret?: Interpreter;
     semanticOutcome?: SemanticOutcome;
     useV2Reads?: boolean;
+    useV2Writes?: boolean;
     interpretV2?: V2Interpreter;
     compileV2?: V2Compiler;
   } = {},
@@ -2078,8 +2119,8 @@ export async function handleCapacityAssistant(
     }
     throw error;
   }
-  if (options.useV2Reads && request.mode === "interpret") {
-    return handleV2ReadCutover(
+  if ((options.useV2Reads || options.useV2Writes) && request.mode === "interpret") {
+    return handleV2Cutover(
       request,
       repository,
       actorUserId,
@@ -2088,7 +2129,7 @@ export async function handleCapacityAssistant(
       validatedContext,
       pendingClarification,
       finish,
-      options,
+      { ...options, allowWrites: options.useV2Writes === true },
     );
   }
   if (options.semanticOutcome) {
@@ -2109,6 +2150,7 @@ export async function handleCapacityAssistant(
       currentDate,
       validatedContext,
       reconciled.pending,
+      options.useV2Writes === true,
     );
     if (nonReadResponse) return nonReadResponse;
     return withPendingClarification(

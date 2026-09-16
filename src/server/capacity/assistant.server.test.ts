@@ -1318,4 +1318,514 @@ describe("Capacity assistant orchestration", () => {
     expect(legacyCalls).toBe(0);
     expect(repository.applyCount).toBe(0);
   });
+
+  test("V2 write cutover previews canonical demand defaults and detailed fields without mutation", async () => {
+    const interpretV2 = (outcome: unknown) => async () => semanticOutcomeSchema.parse(outcome);
+    const v2 = (outcome: unknown) =>
+      handleCapacityAssistant(
+        { mode: "interpret", message: "synthetic write" },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          useV2Writes: true,
+          interpretV2: interpretV2(outcome),
+        },
+      );
+
+    const nestle = await v2({
+      type: "write",
+      action: { kind: "createDemand", demand: { title: "Nestle" } },
+    });
+    expect(nestle).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: {
+        kind: "createDemand",
+        demand: {
+          title: "Nestle",
+          client: "",
+          type: "Project",
+          status: "Incoming",
+          description: "",
+          skills: [],
+          startDate: null,
+          endDate: null,
+          requiredCapacity: 100,
+          owner: null,
+        },
+      },
+      preview: { requiresConfirmation: true, changes: expect.any(Array) },
+    });
+    expect(repository.applyCount).toBe(0);
+
+    const apollo = await v2({
+      type: "write",
+      action: { kind: "createDemand", demand: { title: "Apollo", requiredCapacity: 50 } },
+    });
+    expect(apollo).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "createDemand", demand: { title: "Apollo", requiredCapacity: 50 } },
+    });
+
+    const rfp = await v2({
+      type: "write",
+      action: {
+        kind: "createDemand",
+        demand: {
+          title: "RFP Data Platform",
+          type: "RfP",
+          startDate: { kind: "date", date: "2026-10-01" },
+          endDate: { kind: "date", date: "2026-10-31" },
+          skills: ["Data", "AI"],
+        },
+      },
+    });
+    expect(rfp).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: {
+        kind: "createDemand",
+        demand: {
+          title: "RFP Data Platform",
+          type: "RfP",
+          startDate: "2026-10-01",
+          endDate: "2026-10-31",
+          skills: ["Data", "AI"],
+        },
+      },
+    });
+
+    const ambiguous = await v2({
+      type: "write",
+      action: {
+        kind: "updateConsultant",
+        consultant: { kind: "name", name: "Alex" },
+        patch: { role: "Data" },
+      },
+    });
+    expect(ambiguous).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      field: "consultant",
+      candidates: [{ id: ALEX_ONE }, { id: ALEX_TWO }],
+    });
+
+    const ambiguousBlock = await v2({
+      type: "write",
+      action: {
+        kind: "removeAvailabilityBlock",
+        block: {
+          consultant: { kind: "name", name: "Alex" },
+          startDate: { kind: "date", date: "2026-09-21" },
+          endDate: { kind: "date", date: "2026-09-23" },
+        },
+      },
+    });
+    expect(ambiguousBlock).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      field: "block.consultant",
+      candidates: [{ id: ALEX_ONE }, { id: ALEX_TWO }],
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 consultant clarification completes into a preview and relative profile writes use self", async () => {
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    const v2 = (outcome: unknown, pendingClarification?: typeof PENDING_CLARIFICATION) =>
+      handleCapacityAssistant(
+        {
+          mode: "interpret",
+          message: "synthetic consultant request",
+          ...(pendingClarification ? { pendingClarification } : {}),
+        },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          useV2Writes: true,
+          interpretV2: async () => semanticOutcomeSchema.parse(outcome),
+        },
+      );
+
+    const clarification = await v2({
+      type: "clarification",
+      intentFamily: "create_consultant",
+      knownFacts: { name: "Anna" },
+      missing: ["surname", "level", "role"],
+      question: "What surname, level, and role should Anna have?",
+      reason: "The remaining profile fields are required.",
+    });
+    expect(clarification).toMatchObject({
+      ok: true,
+      kind: "semantic_clarification",
+      pendingClarification: { intentFamily: "create_consultant" },
+    });
+    if (!clarification.ok || clarification.kind !== "semantic_clarification")
+      throw new Error("Expected consultant clarification");
+
+    const completed = await v2(
+      {
+        type: "write",
+        action: {
+          kind: "createConsultant",
+          consultant: { name: "Anna", surname: "Able", level: "Consultant", role: "Strategy" },
+        },
+      },
+      clarification.pendingClarification ?? undefined,
+    );
+    expect(completed).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "createConsultant", consultant: { name: "Anna", surname: "Able" } },
+      pendingClarification: null,
+    });
+
+    const skill = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "changeConsultantSkill",
+        consultant: { kind: "self" },
+        skill: "Management",
+        operation: "add",
+      },
+    });
+    expect(skill).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: {
+        kind: "updateConsultant",
+        consultant: { consultantId: ALEX_ONE },
+        patch: { skills: ["AI", "Management"] },
+      },
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 allocation and demand relative writes preserve Phase 2 preview contracts", async () => {
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    repository.data.allocations.push({
+      id: "20000000-0000-4000-8000-000000000001",
+      demandId: PHOENIX,
+      consultantId: ALEX_ONE,
+      capacity: 25,
+      createdAt: VERSION,
+      updatedAt: VERSION,
+    });
+    const v2 = (outcome: unknown) =>
+      handleCapacityAssistant(
+        { mode: "interpret", message: "synthetic staffing request" },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          useV2Writes: true,
+          interpretV2: async () => semanticOutcomeSchema.parse(outcome),
+        },
+      );
+
+    const set = await v2({
+      type: "write",
+      action: {
+        kind: "setAllocation",
+        consultant: { kind: "self" },
+        demand: { kind: "name", name: "Phoenix" },
+        capacity: 50,
+      },
+    });
+    expect(set).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "setAllocation", capacity: 50 },
+    });
+
+    const remove = await v2({
+      type: "write",
+      action: {
+        kind: "removeAllocation",
+        consultant: { kind: "self" },
+        demand: { kind: "name", name: "Phoenix" },
+      },
+    });
+    expect(remove).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "removeAllocation" },
+    });
+
+    const allocationRelative = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "adjustAllocation",
+        consultant: { kind: "self" },
+        demand: { kind: "name", name: "Phoenix" },
+        delta: 10,
+      },
+    });
+    expect(allocationRelative).toMatchObject({
+      ok: true,
+      kind: "preview",
+      preview: { changes: [{ field: "capacity", before: 25, after: 35 }] },
+    });
+
+    const demandRelative = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "adjustDemandCapacity",
+        demand: { kind: "name", name: "Phoenix" },
+        delta: 50,
+      },
+    });
+    expect(demandRelative).toMatchObject({
+      ok: true,
+      kind: "preview",
+      preview: { changes: [{ field: "requiredCapacity", before: 100, after: 150 }] },
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 demand updates and availability writes preserve typed self references", async () => {
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    repository.data.consultants[0].workingCapacity = 80;
+    const v2 = (outcome: unknown) =>
+      handleCapacityAssistant(
+        { mode: "interpret", message: "synthetic profile request" },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          useV2Writes: true,
+          interpretV2: async () => semanticOutcomeSchema.parse(outcome),
+        },
+      );
+
+    const profile = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "updateConsultantProfile",
+        consultant: { kind: "self" },
+        role: "Data",
+        level: "Senior",
+      },
+    });
+    expect(profile).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: {
+        kind: "updateConsultant",
+        consultant: { consultantId: ALEX_ONE },
+        patch: { role: "Data", level: "Senior", skills: ["AI"] },
+      },
+    });
+
+    const capacity = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "adjustConsultantCapacity",
+        consultant: { kind: "self" },
+        delta: 10,
+      },
+    });
+    expect(capacity).toMatchObject({
+      ok: true,
+      kind: "preview",
+      preview: { changes: [{ field: "workingCapacity", before: 80, after: 90 }] },
+    });
+
+    const demand = await v2({
+      type: "write",
+      action: {
+        kind: "updateDemand",
+        demand: { kind: "name", name: "Phoenix" },
+        patch: { requiredCapacity: 150 },
+      },
+    });
+    expect(demand).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: {
+        kind: "updateDemand",
+        demand: { demandId: PHOENIX },
+        patch: { requiredCapacity: 150 },
+      },
+    });
+
+    const availability = await v2({
+      type: "write",
+      action: {
+        kind: "addAvailabilityBlock",
+        consultant: { kind: "self" },
+        startDate: { kind: "date", date: "2026-09-21" },
+        endDate: { kind: "date", date: "2026-09-23" },
+        note: "Training",
+      },
+    });
+    expect(availability).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: {
+        kind: "addAvailabilityBlock",
+        consultant: { consultantId: ALEX_ONE },
+        startDate: "2026-09-21",
+        endDate: "2026-09-23",
+        note: "Training",
+      },
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 preview confirmation still mutates once and stale previews replace safely", async () => {
+    const write = await handleCapacityAssistant(
+      { mode: "interpret", message: "set Apollo allocation" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        useV2Writes: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "write",
+            action: {
+              kind: "setAllocation",
+              consultant: { kind: "name", name: "Alex Meyer" },
+              demand: { kind: "name", name: "Phoenix" },
+              capacity: 50,
+            },
+          }),
+      },
+    );
+    expect(write).toMatchObject({ ok: true, kind: "preview" });
+    if (!write.ok || write.kind !== "preview" || !write.action) throw new Error("Expected preview");
+
+    const confirmed = await handleCapacityAssistant(
+      {
+        mode: "confirm",
+        confirmed: true,
+        action: write.action,
+        asOfDate: write.preview.asOfDate,
+        previewId: write.preview.previewId,
+      },
+      repository,
+      ACTOR,
+      { currentDate: "2026-09-15" },
+    );
+    expect(confirmed).toMatchObject({
+      ok: true,
+      kind: "executed",
+      success: { result: { changed: true } },
+    });
+    expect(repository.applyCount).toBe(1);
+
+    const staleWrite = await handleCapacityAssistant(
+      { mode: "interpret", message: "change Alex role" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        useV2Writes: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "write",
+            action: {
+              kind: "updateConsultant",
+              consultant: { kind: "name", name: "Alex Meyer" },
+              patch: { role: "Data" },
+            },
+          }),
+      },
+    );
+    expect(staleWrite).toMatchObject({ ok: true, kind: "preview" });
+    if (!staleWrite.ok || staleWrite.kind !== "preview" || !staleWrite.action)
+      throw new Error("Expected stale candidate preview");
+    repository.data.consultants[0].skills = ["Changed elsewhere"];
+    repository.data.consultants[0].updatedAt = "2026-09-15T11:00:00.000Z";
+    const stale = await handleCapacityAssistant(
+      {
+        mode: "confirm",
+        confirmed: true,
+        action: staleWrite.action,
+        asOfDate: staleWrite.preview.asOfDate,
+        previewId: staleWrite.preview.previewId,
+      },
+      repository,
+      ACTOR,
+      { currentDate: "2026-09-15" },
+    );
+    expect(stale).toMatchObject({
+      ok: false,
+      error: { code: "STALE_PREVIEW" },
+      replacement: { preview: expect.any(Object) },
+    });
+    expect(repository.applyCount).toBe(1);
+  });
+
+  test("V2 compound and unsupported outcomes create no preview or mutation, and failures do not fall back to V1", async () => {
+    let legacyCalls = 0;
+    const base = {
+      currentDate: "2026-09-15",
+      useV2Reads: true,
+      useV2Writes: true,
+      interpret: async () => {
+        legacyCalls += 1;
+        throw new Error("V1 must not be called");
+      },
+    };
+    const multiple = await handleCapacityAssistant(
+      { mode: "interpret", message: "two changes" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "multiple_changes",
+            changeCount: 2,
+            reason: "Two changes.",
+          }),
+      },
+    );
+    expect(multiple).toMatchObject({ ok: true, kind: "multiple_changes" });
+
+    const unsupported = await handleCapacityAssistant(
+      { mode: "interpret", message: "delete everything" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({ type: "unsupported", reason: "destructive_action" }),
+      },
+    );
+    expect(unsupported).toMatchObject({ ok: true, kind: "unsupported" });
+
+    await expect(
+      handleCapacityAssistant({ mode: "interpret", message: "provider fails" }, repository, ACTOR, {
+        ...base,
+        interpretV2: async () => {
+          throw new CapacityV2InterpreterError(
+            "CAPACITY_V2_PROVIDER_ERROR",
+            "provider_unavailable",
+          );
+        },
+      }),
+    ).rejects.toMatchObject({ code: "CAPACITY_V2_PROVIDER_ERROR" });
+    expect(legacyCalls).toBe(0);
+    expect(repository.applyCount).toBe(0);
+  });
 });
