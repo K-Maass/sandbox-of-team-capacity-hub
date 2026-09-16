@@ -14,7 +14,10 @@ import type {
 } from "@/domain/capacity/assistant";
 import { clarificationFieldSchema, conversationContextSchema } from "@/domain/capacity/assistant";
 import type { PendingClarification } from "@/domain/capacity/assistant-clarification";
-import type { SemanticOutcome } from "@/domain/capacity/assistant-semantic";
+import type {
+  SemanticConversationOrHelp,
+  SemanticOutcome,
+} from "@/domain/capacity/assistant-semantic";
 import type {
   ActionPreview,
   ActionResult,
@@ -69,9 +72,11 @@ type V2Compiler = (
 ) => SemanticCompilerOutput;
 
 const V2_READ_CUTOVER_UNSUPPORTED_MESSAGE =
-  "The Luna V2 read cutover supports read requests only. Writes, compound requests, help, and clarification completion remain on later stages; V1 fallback is not available.";
+  "The Luna V2 read cutover supports read requests only. V1 fallback is not available.";
 const V2_READ_CUTOVER_FAILURE_MESSAGE =
   "The Luna V2 read cutover could not compile this read safely. V1 fallback is not available.";
+const V2_WRITE_CUTOVER_MESSAGE =
+  "Luna V2 write interpretation is not cut over yet. No preview or mutation was created.";
 
 type ConsultantReadRow = { consultant: ConsultantDto; capacity: CapacitySnapshot | null };
 type DemandReadRow = { demand: DemandDto; staffing: StaffingSnapshot };
@@ -114,6 +119,29 @@ function demandRow(demand: DemandDto, staffing: StaffingSnapshot): AssistantDema
     staffedCapacity: staffing.staffedCapacity,
     gapCapacity: staffing.gapCapacity,
   };
+}
+
+function productHelpAnswer(topic: string): string {
+  const answers: Record<string, string> = {
+    pipeline: "Pipeline work is tentative and does not reserve committed capacity.",
+    confirmed: "Confirmed work is Won demand and reserves capacity.",
+    committedCapacity:
+      "Committed capacity is the sum of allocations on Won or In Progress demands active on the date.",
+    workingCapacity:
+      "Working capacity is the consultant's normal percentage, reduced to zero on unavailable days or for archived consultants.",
+    freeCapacity:
+      "Free capacity is effective working capacity minus committed load; it can be negative when someone is overallocated.",
+    overAllocation:
+      "Over-allocation is allowed as an intentional exception and produces a warning rather than blocking a write.",
+    candidateRanking:
+      "Candidates rank by exact skill matches, then deterministic available capacity, then stable name ordering.",
+    includePipeline:
+      "Include pipeline adds Incoming allocations to the planning scenario without changing committed capacity.",
+    rfp: "An RfP is a demand type for a request for proposal and follows the same staffing rules as other demand.",
+    assistantScope:
+      "The assistant can read Capacity Hub data and preview typed changes. Every write needs explicit confirmation; SQL, deletion, and history are unavailable.",
+  };
+  return answers[topic] ?? "Capacity Hub help is unavailable for that topic.";
 }
 
 function plural(count: number, singular: string, pluralValue = `${singular}s`): string {
@@ -520,27 +548,7 @@ function readPresentation(
       };
     }
     case "productHelp": {
-      const answers: Record<string, string> = {
-        pipeline: "Pipeline work is tentative and does not reserve committed capacity.",
-        confirmed: "Confirmed work is Won demand and reserves capacity.",
-        committedCapacity:
-          "Committed capacity is the sum of allocations on Won or In Progress demands active on the date.",
-        workingCapacity:
-          "Working capacity is the consultant's normal percentage, reduced to zero on unavailable days or for archived consultants.",
-        freeCapacity:
-          "Free capacity is effective working capacity minus committed load; it can be negative when someone is overallocated.",
-        overAllocation:
-          "Over-allocation is allowed as an intentional exception and produces a warning rather than blocking a write.",
-        candidateRanking:
-          "Candidates rank by exact skill matches, then deterministic available capacity, then stable name ordering.",
-        includePipeline:
-          "Include pipeline adds Incoming allocations to the planning scenario without changing committed capacity.",
-        rfp: "An RfP is a demand type for a request for proposal and follows the same staffing rules as other demand.",
-        assistantScope:
-          "The assistant can read Capacity Hub data and preview typed changes. Every write needs explicit confirmation; SQL, deletion, and history are unavailable.",
-      };
-      const answer =
-        answers[intent.action.topic] ?? "Capacity Hub help is unavailable for that topic.";
+      const answer = productHelpAnswer(intent.action.topic);
       return { message: answer, details: { kind: "help", topic: intent.action.topic, answer } };
     }
     case "findStaffingCandidates": {
@@ -1794,6 +1802,99 @@ function currentUserConsultantIdForV2(data: CapacityDataSet): string {
   return matches.length === 1 ? matches[0].id : "";
 }
 
+function conversationMessage(
+  topic: SemanticConversationOrHelp["topic"],
+  pendingClarification: PendingClarification | null,
+): string {
+  switch (topic) {
+    case "greeting":
+      return "Hello. I can answer Capacity Hub questions and preview typed staffing changes.";
+    case "thanks":
+      return "You’re welcome.";
+    case "howToUse":
+      return "Ask about consultants, demands, capacity, availability, or staffing candidates. Reads are immediate; every write is previewed and needs explicit confirmation.";
+    case "clarification":
+      return pendingClarification
+        ? `The clarification is still open. ${pendingClarification.question} Outstanding fields: ${pendingClarification.missing.join(", ")}.`
+        : "There is no outstanding clarification. Ask a new Capacity Hub question whenever you’re ready.";
+    default:
+      return productHelpAnswer(topic);
+  }
+}
+
+function routeSemanticNonReadOutcome(
+  outcome: SemanticOutcome,
+  pendingClarification: PendingClarification | null,
+  currentDate: string,
+  context: ConversationContext | undefined,
+  reconciledPending: PendingClarification | null,
+): AssistantResponse | null {
+  if (outcome.type === "clarification") {
+    return withPendingClarification(
+      {
+        ok: true,
+        kind: "semantic_clarification",
+        message: outcome.question,
+        currentDate,
+        context,
+      },
+      reconciledPending,
+    );
+  }
+  if (outcome.type === "conversation_or_help") {
+    return withPendingClarification(
+      {
+        ok: true,
+        kind: "conversation_or_help",
+        topic: outcome.topic,
+        message: conversationMessage(outcome.topic, pendingClarification),
+        currentDate,
+        context,
+      },
+      reconciledPending,
+    );
+  }
+  if (outcome.type === "unsupported") {
+    return withPendingClarification(
+      {
+        ok: true,
+        kind: "unsupported",
+        message: unsupportedMessage(outcome.reason),
+        reason: outcome.reason,
+        currentDate,
+        context,
+      },
+      reconciledPending,
+    );
+  }
+  if (outcome.type === "multiple_changes") {
+    return withPendingClarification(
+      {
+        ok: true,
+        kind: "multiple_changes",
+        changeCount: outcome.changeCount,
+        message: `I found ${outcome.changeCount} changes. Please send one change at a time; no preview or mutation was created.`,
+        currentDate,
+        context,
+      },
+      reconciledPending,
+    );
+  }
+  if (outcome.type === "write" || outcome.type === "relativeWrite") {
+    return withPendingClarification(
+      errorResponse(
+        "V2_WRITE_CUTOVER_NOT_READY",
+        V2_WRITE_CUTOVER_MESSAGE,
+        currentDate,
+        false,
+        context,
+      ),
+      reconciledPending,
+    );
+  }
+  return null;
+}
+
 async function handleV2ReadCutover(
   request: Extract<AssistantRequest, { mode: "interpret" }>,
   repository: CapacityRepository,
@@ -1827,27 +1928,14 @@ async function handleV2ReadCutover(
       null,
     );
   }
-  if (outcome.type === "clarification" && reconciled.pending) {
-    return {
-      ok: true,
-      kind: "semantic_clarification",
-      message: outcome.question,
-      pendingClarification: reconciled.pending,
-      currentDate,
-      context: validatedContext,
-    };
-  }
-  if (outcome.type !== "read") {
-    return finish(
-      errorResponse(
-        "V2_READ_CUTOVER_UNSUPPORTED",
-        V2_READ_CUTOVER_UNSUPPORTED_MESSAGE,
-        currentDate,
-        false,
-        validatedContext,
-      ),
-    );
-  }
+  const nonReadResponse = routeSemanticNonReadOutcome(
+    outcome,
+    pendingClarification,
+    currentDate,
+    validatedContext,
+    reconciled.pending,
+  );
+  if (nonReadResponse) return nonReadResponse;
 
   const compilerOptions: SemanticCompilerOptions = {
     data: currentData,
@@ -2015,16 +2103,14 @@ export async function handleCapacityAssistant(
         null,
       );
     }
-    if (options.semanticOutcome.type === "clarification" && reconciled.pending) {
-      return {
-        ok: true,
-        kind: "semantic_clarification",
-        message: options.semanticOutcome.question,
-        pendingClarification: reconciled.pending,
-        currentDate,
-        context: validatedContext,
-      };
-    }
+    const nonReadResponse = routeSemanticNonReadOutcome(
+      options.semanticOutcome,
+      pendingClarification,
+      currentDate,
+      validatedContext,
+      reconciled.pending,
+    );
+    if (nonReadResponse) return nonReadResponse;
     return withPendingClarification(
       errorResponse(
         "SEMANTIC_OUTCOME_NOT_ROUTED",

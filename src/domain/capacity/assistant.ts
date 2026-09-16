@@ -9,6 +9,7 @@ import type {
   ReadAction,
 } from "./contracts";
 import { pendingClarificationSchema, type PendingClarification } from "./assistant-clarification";
+import type { SemanticConversationOrHelp } from "./assistant-semantic";
 import { dateRangeSchema } from "./assistant-context";
 import { isoDateSchema, proposedActionSchema, readActionSchema, uuidSchema } from "./validation";
 
@@ -427,6 +428,22 @@ export type AssistantResponse =
   | (PendingClarificationResponse & {
       ok: true;
       kind: "semantic_clarification";
+      message: string;
+      currentDate: string;
+      context?: ConversationContext;
+    })
+  | (PendingClarificationResponse & {
+      ok: true;
+      kind: "conversation_or_help";
+      topic: SemanticConversationOrHelp["topic"];
+      message: string;
+      currentDate: string;
+      context?: ConversationContext;
+    })
+  | (PendingClarificationResponse & {
+      ok: true;
+      kind: "multiple_changes";
+      changeCount: number;
       message: string;
       currentDate: string;
       context?: ConversationContext;

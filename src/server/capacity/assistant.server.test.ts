@@ -17,6 +17,7 @@ const ALEX_ONE = "00000000-0000-4000-8000-000000000001";
 const ALEX_TWO = "00000000-0000-4000-8000-000000000002";
 const ANNA = "00000000-0000-4000-8000-000000000003";
 const MAYA = "00000000-0000-4000-8000-000000000004";
+const KARIM = "00000000-0000-4000-8000-000000000005";
 const PHOENIX = "10000000-0000-4000-8000-000000000001";
 const PHOENIX_TWO = "10000000-0000-4000-8000-000000000002";
 const ACTOR = "30000000-0000-4000-8000-000000000001";
@@ -269,10 +270,113 @@ describe("Capacity assistant orchestration", () => {
       },
     );
     expect(retained).toMatchObject({
-      ok: false,
-      error: { code: "SEMANTIC_OUTCOME_NOT_ROUTED" },
+      ok: true,
+      kind: "conversation_or_help",
+      topic: "clarification",
       pendingClarification: replacementPending,
     });
+    if (retained.ok && retained.kind === "conversation_or_help") {
+      expect(retained.message).toContain("Outstanding fields: level, role.");
+    }
+  });
+
+  test("routes the semantic clarification lifecycle without previewing or mutating", async () => {
+    repository.data.consultants.push({
+      ...repository.data.consultants[0],
+      id: KARIM,
+      name: "Karim",
+      surname: "Maass",
+    });
+    const withV2 = (outcome: unknown, pendingClarification?: typeof PENDING_CLARIFICATION) =>
+      handleCapacityAssistant(
+        {
+          mode: "interpret",
+          message: "synthetic semantic continuation",
+          ...(pendingClarification ? { pendingClarification } : {}),
+        },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          interpretV2: async () => semanticOutcomeSchema.parse(outcome),
+        },
+      );
+
+    const initial = await withV2({
+      type: "clarification",
+      intentFamily: "create_consultant",
+      knownFacts: { name: "Anna" },
+      missing: ["surname", "level", "role"],
+      question: "What surname, level, and role should Anna have?",
+      reason: "A consultant needs the remaining profile fields before creation.",
+    });
+    expect(initial).toMatchObject({ ok: true, kind: "semantic_clarification" });
+    if (!initial.ok || initial.kind !== "semantic_clarification")
+      throw new Error("Expected pending");
+
+    const help = await withV2(
+      { type: "conversation_or_help", topic: "clarification" },
+      initial.pendingClarification ?? undefined,
+    );
+    expect(help).toMatchObject({
+      ok: true,
+      kind: "conversation_or_help",
+      topic: "clarification",
+      pendingClarification: initial.pendingClarification,
+    });
+    if (help.ok && help.kind === "conversation_or_help") {
+      expect(help.message).toContain("Outstanding fields: surname, level, role.");
+    }
+
+    const completed = await withV2(
+      {
+        type: "write",
+        action: {
+          kind: "createConsultant",
+          consultant: { name: "Anna", surname: "Able", level: "Consultant", role: "Strategy" },
+        },
+      },
+      help.pendingClarification ?? undefined,
+    );
+    expect(completed).toMatchObject({
+      ok: false,
+      error: { code: "V2_WRITE_CUTOVER_NOT_READY" },
+      pendingClarification: null,
+    });
+
+    const unrelatedRead = await withV2(
+      {
+        type: "read",
+        action: { kind: "getConsultant", consultant: { kind: "name", name: "Karim" } },
+      },
+      help.pendingClarification ?? undefined,
+    );
+    expect(unrelatedRead).toMatchObject({
+      ok: true,
+      kind: "read",
+      pendingClarification: null,
+      details: { kind: "people", rows: [{ name: "Karim Maass" }] },
+    });
+
+    const unsupported = await withV2({
+      type: "unsupported",
+      reason: "partial_day_availability",
+    });
+    expect(unsupported).toMatchObject({
+      ok: true,
+      kind: "unsupported",
+      reason: "partial_day_availability",
+      pendingClarification: null,
+    });
+
+    const compound = await withV2({
+      type: "multiple_changes",
+      changeCount: 2,
+      reason: "Two changes were requested.",
+    });
+    expect(compound).toMatchObject({ ok: true, kind: "multiple_changes", changeCount: 2 });
+    expect(repository.applyCount).toBe(0);
   });
 
   test("handler rejects tampered pending state before action execution", async () => {
@@ -1118,19 +1222,78 @@ describe("Capacity assistant orchestration", () => {
       pendingClarification: { intentFamily: "create_consultant" },
     });
 
-    for (const outcome of [
-      { type: "write", action: { kind: "createDemand", demand: { title: "Nope" } } },
-      { type: "multiple_changes", changeCount: 2, reason: "Two changes." },
-      { type: "conversation_or_help", topic: "howToUse" },
-    ]) {
-      const response = await handleCapacityAssistant(
-        { mode: "interpret", message: "not a read" },
-        repository,
-        ACTOR,
-        { ...base, interpretV2: async () => semanticOutcomeSchema.parse(outcome) },
-      );
-      expect(response).toMatchObject({ ok: false, error: { code: "V2_READ_CUTOVER_UNSUPPORTED" } });
-    }
+    const write = await handleCapacityAssistant(
+      { mode: "interpret", message: "not a read" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "write",
+            action: { kind: "createDemand", demand: { title: "Nope" } },
+          }),
+      },
+    );
+    expect(write).toMatchObject({
+      ok: false,
+      error: { code: "V2_WRITE_CUTOVER_NOT_READY" },
+    });
+
+    const relativeWrite = await handleCapacityAssistant(
+      { mode: "interpret", message: "not a read" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "relativeWrite",
+            asOf: { kind: "date", date: "2026-09-15" },
+            operation: {
+              kind: "adjustConsultantCapacity",
+              consultant: { kind: "name", name: "Alex Smith" },
+              delta: 10,
+            },
+          }),
+      },
+    );
+    expect(relativeWrite).toMatchObject({
+      ok: false,
+      error: { code: "V2_WRITE_CUTOVER_NOT_READY" },
+    });
+
+    const multiple = await handleCapacityAssistant(
+      { mode: "interpret", message: "not a read" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "multiple_changes",
+            changeCount: 2,
+            reason: "Two changes.",
+          }),
+      },
+    );
+    expect(multiple).toMatchObject({
+      ok: true,
+      kind: "multiple_changes",
+      changeCount: 2,
+    });
+
+    const help = await handleCapacityAssistant(
+      { mode: "interpret", message: "not a read" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({ type: "conversation_or_help", topic: "howToUse" }),
+      },
+    );
+    expect(help).toMatchObject({ ok: true, kind: "conversation_or_help", topic: "howToUse" });
 
     const compileFailure = await handleCapacityAssistant(
       { mode: "interpret", message: "broken read" },

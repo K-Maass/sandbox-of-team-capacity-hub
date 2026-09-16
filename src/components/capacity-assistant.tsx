@@ -19,6 +19,7 @@ import type {
   AssistantResponse,
   ConversationContext,
 } from "@/domain/capacity/assistant";
+import type { PendingClarification } from "@/domain/capacity/assistant-clarification";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/data";
 import { cn } from "@/lib/utils";
@@ -370,6 +371,9 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [conversationContext, setConversationContext] = useState<ConversationContext | undefined>();
+  const [pendingClarification, setPendingClarification] = useState<PendingClarification | null>(
+    null,
+  );
   const [pending, setPending] = useState(false);
   const [pendingMode, setPendingMode] = useState<AssistantRequest["mode"] | null>(null);
   const [resolvedCards, setResolvedCards] = useState<Set<string>>(() => new Set());
@@ -401,7 +405,12 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
         if (!token) throw new Error("UNAUTHORIZED");
         const requestBody =
           body.mode === "interpret" || body.mode === "clarify"
-            ? { ...body, context: body.context ?? conversationContext }
+            ? {
+                ...body,
+                context: body.context ?? conversationContext,
+                pendingClarification:
+                  body.pendingClarification ?? pendingClarification ?? undefined,
+              }
             : body;
         const response = await fetch("/api/ai/capacity", {
           method: "POST",
@@ -411,6 +420,9 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
         });
         const payload = (await response.json()) as AssistantResponse;
         if (payload.context) setConversationContext(payload.context);
+        if (payload.pendingClarification !== undefined) {
+          setPendingClarification(payload.pendingClarification ?? null);
+        }
         if (
           !payload.ok &&
           (payload.error.code === "CONTEXT_INVALIDATED" ||
@@ -446,7 +458,7 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
         setPendingMode(null);
       }
     },
-    [conversationContext, invalidateCapacity],
+    [conversationContext, invalidateCapacity, pendingClarification],
   );
 
   const submit = (event?: FormEvent) => {
@@ -600,6 +612,44 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
                                   </Button>
                                 ))}
                               </div>
+                            </>
+                          )}
+                          {result.kind === "semantic_clarification" && (
+                            <>
+                              <p>{result.message}</p>
+                              {pendingClarification && (
+                                <p className="text-xs text-muted-foreground">
+                                  Still needed: {pendingClarification.missing.join(", ")}.
+                                </p>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={pending}
+                                onClick={() => {
+                                  setPendingClarification(null);
+                                  setMessages((items) => [
+                                    ...items,
+                                    {
+                                      id: crypto.randomUUID(),
+                                      role: "assistant",
+                                      text: "Okay, I canceled that clarification.",
+                                    },
+                                  ]);
+                                }}
+                              >
+                                <X className="h-4 w-4" /> Never mind
+                              </Button>
+                            </>
+                          )}
+                          {result.kind === "conversation_or_help" && <p>{result.message}</p>}
+                          {result.kind === "multiple_changes" && (
+                            <>
+                              <p>{result.message}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Send one change at a time; each write will still require
+                                confirmation.
+                              </p>
                             </>
                           )}
                           {result.kind === "preview" && (
