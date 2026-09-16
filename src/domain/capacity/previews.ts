@@ -17,7 +17,7 @@ import { CapacityActionFailure } from "./errors";
 import { capacityWarnings, getCapacitySnapshot, getStaffingSnapshot } from "./metrics";
 import { demandConsumesCapacityOn, demandOverlapsRange } from "./rules";
 import { resolveAvailabilityBlock, resolveConsultant, resolveDemand } from "./resolution";
-import { availabilityRangesOverlap, isDateRangeOrdered } from "./form-validation";
+import { availabilityRangesOverlap, isDateRangeOrdered, normalizeSkills } from "./form-validation";
 
 function json(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
@@ -52,6 +52,22 @@ function rowVersions(data: CapacityDataSet): RowVersion[] {
       updatedAt: row.updatedAt,
     })),
   ].sort((a, b) => a.table.localeCompare(b.table) || a.id.localeCompare(b.id));
+}
+
+function preconditionsMatchSnapshot(current: CapacityDataSet, expected: RowVersion[]): boolean {
+  return expected.every((version) => {
+    const rows =
+      version.table === "consultants"
+        ? current.consultants
+        : version.table === "demands"
+          ? current.demands
+          : version.table === "allocations"
+            ? current.allocations
+            : current.availabilityBlocks;
+    const row = rows.find((item) => item.id === version.id);
+    if (!row || row.updatedAt !== version.updatedAt) return false;
+    return !version.stateFingerprint || JSON.stringify(row) === version.stateFingerprint;
+  });
 }
 
 function patchConsultant(
@@ -119,16 +135,60 @@ function validateEmailUniqueness(
   if (match) throw new CapacityActionFailure("CONFLICT", "A consultant already uses this email");
 }
 
+function validateNewConsultantEmailUniqueness(data: CapacityDataSet, email?: string | null) {
+  if (!email) return;
+  const normalized = email.trim().toLowerCase();
+  if (
+    data.consultants.some((consultant) => consultant.email?.trim().toLowerCase() === normalized)
+  ) {
+    throw new CapacityActionFailure(
+      "CONFLICT",
+      "A consultant already uses this email. Ask them to join or link that profile instead.",
+      { field: "consultant.email" },
+    );
+  }
+}
+
 function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedAction {
   switch (action.kind) {
+    case "createConsultant": {
+      validateNewConsultantEmailUniqueness(data, action.consultant.email);
+      return {
+        kind: action.kind,
+        consultant: {
+          name: action.consultant.name.trim(),
+          surname: action.consultant.surname.trim(),
+          email: action.consultant.email?.trim().toLowerCase() ?? null,
+          level: action.consultant.level ?? "Consultant",
+          role: action.consultant.role ?? "Strategy",
+          skills: normalizeSkills(action.consultant.skills ?? []),
+          workingCapacity: action.consultant.workingCapacity ?? 100,
+        },
+      };
+    }
     case "updateConsultant": {
       const consultant = resolveConsultant(action.consultant, data.consultants, {
         field: "consultant",
       });
       validateEmailUniqueness(data, consultant.id, action.patch.email);
-      return { kind: action.kind, consultantId: consultant.id, patch: action.patch };
+      return {
+        kind: action.kind,
+        consultantId: consultant.id,
+        patch: action.patch.skills
+          ? { ...action.patch, skills: normalizeSkills(action.patch.skills) }
+          : action.patch,
+      };
     }
     case "createDemand": {
+      if (!isDateRangeOrdered(action.demand.startDate ?? null, action.demand.endDate ?? null)) {
+        throw new CapacityActionFailure(
+          "VALIDATION_ERROR",
+          "End date cannot be before start date",
+          {
+            field: "endDate",
+          },
+        );
+      }
       const owner = action.demand.owner
         ? resolveConsultant(action.demand.owner, data.consultants, {
             activeOnly: true,
@@ -198,6 +258,15 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
       };
     }
     case "addAvailabilityBlock": {
+      if (!isDateRangeOrdered(action.startDate, action.endDate)) {
+        throw new CapacityActionFailure(
+          "VALIDATION_ERROR",
+          "End date cannot be before start date",
+          {
+            field: "endDate",
+          },
+        );
+      }
       const consultant = resolveConsultant(action.consultant, data.consultants, {
         activeOnly: true,
         field: "consultant",
@@ -225,6 +294,18 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
       };
     }
     case "removeAvailabilityBlock": {
+      if (
+        "consultant" in action.block &&
+        !isDateRangeOrdered(action.block.startDate, action.block.endDate)
+      ) {
+        throw new CapacityActionFailure(
+          "VALIDATION_ERROR",
+          "End date cannot be before start date",
+          {
+            field: "block.endDate",
+          },
+        );
+      }
       const block = resolveAvailabilityBlock(
         action.block,
         data.availabilityBlocks,
@@ -239,6 +320,23 @@ function resolveAction(action: ProposedAction, data: CapacityDataSet): ResolvedA
 function afterData(data: CapacityDataSet, action: ResolvedAction): CapacityDataSet {
   const next = structuredClone(data);
   switch (action.kind) {
+    case "createConsultant":
+      next.consultants.push({
+        id: "preview-consultant",
+        name: action.consultant.name,
+        surname: action.consultant.surname,
+        email: action.consultant.email,
+        level: action.consultant.level,
+        role: action.consultant.role,
+        skills: action.consultant.skills,
+        workingCapacity: action.consultant.workingCapacity,
+        archivedAt: null,
+        linkedToUser: false,
+        isCurrentUser: false,
+        createdAt: "preview",
+        updatedAt: "preview",
+      });
+      break;
     case "updateConsultant":
       next.consultants = next.consultants.map((consultant) =>
         consultant.id === action.consultantId
@@ -298,6 +396,11 @@ function afterData(data: CapacityDataSet, action: ResolvedAction): CapacityDataS
 function changesFor(data: CapacityDataSet, action: ResolvedAction): FieldChange[] {
   const changes: FieldChange[] = [];
   switch (action.kind) {
+    case "createConsultant":
+      for (const [field, value] of Object.entries(action.consultant)) {
+        change(changes, field, null, value);
+      }
+      break;
     case "updateConsultant": {
       const consultant = data.consultants.find((item) => item.id === action.consultantId)!;
       const after = patchConsultant(consultant, action.patch);
@@ -482,6 +585,8 @@ function warningsFor(
   asOfDate: string,
 ): ActionWarning[] {
   switch (action.kind) {
+    case "createConsultant":
+      return [];
     case "setAllocation": {
       const consultant = data.consultants.find((item) => item.id === action.consultantId)!;
       const demand = data.demands.find((item) => item.id === action.demandId)!;
@@ -560,6 +665,8 @@ function warningsFor(
 function confirmationText(action: ResolvedAction, changes: FieldChange[]): string {
   const count = changes.length;
   switch (action.kind) {
+    case "createConsultant":
+      return `Confirm creation of consultant “${action.consultant.name} ${action.consultant.surname}”`;
     case "updateConsultant":
       return `Confirm ${count} change(s) to consultant ${action.consultantId}`;
     case "createDemand":
@@ -582,7 +689,14 @@ export async function buildActionPreview(
   data: CapacityDataSet,
   asOfDate: string,
   actorUserId: string,
+  expectedPreconditions?: RowVersion[],
 ): Promise<ActionPreview> {
+  if (expectedPreconditions && !preconditionsMatchSnapshot(data, expectedPreconditions)) {
+    throw new CapacityActionFailure(
+      "STALE_PREVIEW",
+      "The underlying data changed before the relative preview could be generated",
+    );
+  }
   const action = resolveAction(proposedAction, data);
   const after = afterData(data, action);
   const changes = changesFor(data, action);

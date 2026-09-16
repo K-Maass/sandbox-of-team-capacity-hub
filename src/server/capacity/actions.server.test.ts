@@ -12,6 +12,7 @@ const ALPHA = "10000000-0000-4000-8000-000000000001";
 const BETA = "10000000-0000-4000-8000-000000000002";
 const PIPELINE = "10000000-0000-4000-8000-000000000003";
 const ALLOCATION = "20000000-0000-4000-8000-000000000001";
+const OTHER_ALLOCATION = "20000000-0000-4000-8000-000000000002";
 const ACTOR = "30000000-0000-4000-8000-000000000001";
 const VERSION = "2026-09-15T10:00:00.000Z";
 
@@ -301,6 +302,69 @@ describe("typed Capacity Hub action service", () => {
     expect(candidates.data.candidates[0].skillMatch).toMatchObject({ count: 1, matched: ["AI"] });
   });
 
+  test("excludes only the target demand allocation from suitable-demand capacity baseline", async () => {
+    repository.data.demands[0].requiredCapacity = 70;
+    repository.data.demands[0].skills = ["AI"];
+    repository.data.allocations = [
+      {
+        id: ALLOCATION,
+        consultantId: ALEX,
+        demandId: ALPHA,
+        capacity: 30,
+        createdAt: VERSION,
+        updatedAt: VERSION,
+      },
+      {
+        id: OTHER_ALLOCATION,
+        consultantId: ALEX,
+        demandId: BETA,
+        capacity: 50,
+        createdAt: VERSION,
+        updatedAt: VERSION,
+      },
+    ];
+    const result = await executeCapacityAction(
+      parse({
+        mode: "read",
+        action: {
+          kind: "findSuitableDemands",
+          consultant: { name: "Alex Smith" },
+          startDate: "2026-09-14",
+          endDate: "2026-09-18",
+          includePipeline: false,
+        },
+      }),
+      repository,
+      ACTOR,
+    );
+    expect(result.data.demands).toContainEqual(
+      expect.objectContaining({
+        demand: expect.objectContaining({ id: ALPHA }),
+        staffing: expect.objectContaining({ gapCapacity: 40 }),
+      }),
+    );
+  });
+
+  test("canonicalizes internal whitespace in skill-supply filters", async () => {
+    const result = await executeCapacityAction(
+      parse({
+        mode: "read",
+        action: {
+          kind: "skillSupplyDemand",
+          startDate: "2026-09-14",
+          endDate: "2026-09-18",
+          includePipeline: false,
+          skill: "  SUPPLY   CHAIN ",
+        },
+      }),
+      repository,
+      ACTOR,
+    );
+    expect(result.data.skills).toEqual([
+      expect.objectContaining({ skill: "Supply Chain", consultants: 1, demandCount: 1 }),
+    ]);
+  });
+
   test("supports every primitive and derived read contract", async () => {
     const listConsultants = await executeCapacityAction(
       parse({ mode: "read", action: { kind: "listConsultants", onDate: "2026-09-15" } }),
@@ -351,9 +415,9 @@ describe("typed Capacity Hub action service", () => {
       rawFreeCapacity: 40,
     });
     expect(overview.data.demand).toMatchObject({
-      requiredCapacity: 400,
+      requiredCapacity: 200,
       staffedCapacity: 60,
-      gapCapacity: 340,
+      gapCapacity: 140,
     });
   });
 
@@ -685,5 +749,24 @@ describe("typed Capacity Hub action service", () => {
       after: { capacity: 60 },
     });
     expect(repository.applyCount).toBe(0);
+  });
+
+  test("prevents duplicate consultant email creation before mutation", async () => {
+    const duplicate = await executeCapacityAction(
+      parse({
+        mode: "preview",
+        asOfDate: "2026-09-15",
+        action: {
+          kind: "createConsultant",
+          consultant: { name: "Another", surname: "Alex", email: "ALEX@example.com" },
+        },
+      }),
+      repository,
+      ACTOR,
+    );
+    expect(duplicate).toMatchObject({
+      ok: false,
+      error: { code: "CONFLICT", field: "consultant.email" },
+    });
   });
 });

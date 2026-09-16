@@ -10,8 +10,9 @@ import type {
   CapacityIntent,
   ClarificationField,
   ClarificationSelection,
+  ConversationContext,
 } from "@/domain/capacity/assistant";
-import { clarificationFieldSchema } from "@/domain/capacity/assistant";
+import { clarificationFieldSchema, conversationContextSchema } from "@/domain/capacity/assistant";
 import type {
   ActionPreview,
   ActionResult,
@@ -24,13 +25,19 @@ import type {
   StaffingSnapshot,
 } from "@/domain/capacity/contracts";
 import { todayIsoDate } from "@/domain/capacity/rules";
+import { CapacityActionFailure } from "@/domain/capacity/errors";
+import { resolveConsultant, resolveDemand } from "@/domain/capacity/resolution";
+import { normalizeSkills } from "@/domain/capacity/form-validation";
 import { executeCapacityAction, type CapacityActionResponse } from "./actions.server";
 import type { CapacityRepository } from "./repository";
+import { CAPACITY_ASSISTANT_BOUNDS } from "./bounds.server";
 
 type Interpreter = (
   message: string,
   currentDate: string,
   signal?: AbortSignal,
+  context?: ConversationContext,
+  knownConsultantNames?: string[],
 ) => Promise<CapacityIntent>;
 
 type ConsultantReadRow = { consultant: ConsultantDto; capacity: CapacitySnapshot | null };
@@ -160,9 +167,40 @@ function readPresentation(
       };
     }
     case "getCapacity": {
-      const data = result as { consultant: ConsultantDto; capacity: CapacitySnapshot };
+      const data = result as {
+        consultant: ConsultantDto;
+        capacity: CapacitySnapshot;
+        activeAllocations?: Array<{
+          demand: DemandDto;
+          capacity: number;
+          classification: "committed" | "pipeline";
+        }>;
+      };
+      const focus = intent.action.focus ?? "free";
+      const zeroCapacity = data.capacity.effectiveWorkingCapacity === 0;
+      const overAllocated = data.capacity.overAllocatedCapacity > 0;
+      const focusedMessage =
+        focus === "committed"
+          ? `${fullName(data.consultant)} has ${data.capacity.committedCapacity}% committed capacity on ${data.capacity.onDate}.`
+          : focus === "pipeline"
+            ? `${fullName(data.consultant)} has ${data.capacity.pipelineCapacity}% pipeline capacity on ${data.capacity.onDate}.`
+            : focus === "utilization"
+              ? zeroCapacity
+                ? `${fullName(data.consultant)} has no effective working capacity on ${data.capacity.onDate}; utilization is not defined for that day.`
+                : `${fullName(data.consultant)} is ${Math.round((data.capacity.committedCapacity / data.capacity.effectiveWorkingCapacity) * 100)}% utilized on ${data.capacity.onDate}.`
+              : focus === "breakdown"
+                ? `${fullName(data.consultant)}: ${data.capacity.effectiveWorkingCapacity}% working − ${data.capacity.committedCapacity}% committed = ${data.capacity.rawFreeCapacity}% free.`
+                : focus === "allocations"
+                  ? data.activeAllocations?.length
+                    ? `${fullName(data.consultant)} has ${data.activeAllocations.length} allocation${data.activeAllocations.length === 1 ? "" : "s"} contributing on ${data.capacity.onDate}.`
+                    : `${fullName(data.consultant)} has no allocations contributing on ${data.capacity.onDate}.`
+                  : zeroCapacity
+                    ? `${fullName(data.consultant)} has no effective working capacity on ${data.capacity.onDate}.`
+                    : overAllocated
+                      ? `${fullName(data.consultant)} has 0% free and is ${data.capacity.overAllocatedCapacity}% overallocated on ${data.capacity.onDate}.`
+                      : `${fullName(data.consultant)} has ${data.capacity.availableCapacity}% available capacity on ${data.capacity.onDate}.`;
       return {
-        message: `${fullName(data.consultant)} has ${data.capacity.availableCapacity}% available capacity on ${data.capacity.onDate}${data.capacity.isUnavailable ? " and is marked unavailable" : ""}.`,
+        message: `${focusedMessage}${data.capacity.isArchived ? " The consultant is archived." : data.capacity.isUnavailable ? " The consultant is marked unavailable." : ""}`,
         details: {
           kind: "capacity",
           onDate: data.capacity.onDate,
@@ -170,8 +208,307 @@ function readPresentation(
           committedCapacity: data.capacity.committedCapacity,
           pipelineCapacity: data.capacity.pipelineCapacity,
           unavailable: data.capacity.isUnavailable,
+          archived: data.capacity.isArchived,
+          allocations: data.activeAllocations?.map((allocation) => ({
+            demand: allocation.demand.title,
+            capacity: allocation.capacity,
+            classification: allocation.classification,
+          })),
         },
       };
+    }
+    case "getCapacityRange": {
+      const data = result as {
+        consultant: ConsultantDto;
+        range: {
+          range: { startDate: string; endDate: string };
+          days: CapacitySnapshot[];
+          aggregate: {
+            averageFreeCapacity: number;
+            minimumFreeCapacity: number;
+            maximumFreeCapacity: number;
+            effectiveWorkingCapacity: number;
+            averageCommittedCapacity: number;
+            averagePipelineCapacity: number;
+            workingDaysConsidered: number;
+          };
+        };
+        allocations: Array<{
+          demand: string;
+          capacity: number;
+          activeDays: string[];
+          classification: "committed" | "pipeline";
+        }>;
+      };
+      const aggregate = data.range.aggregate;
+      if (!data.range.days.length) {
+        return {
+          message: `The requested range ${data.range.range.startDate} to ${data.range.range.endDate} contains no Monday–Friday working days. Ask for an exact weekend date for point-day capacity.`,
+          details: {
+            kind: "rangeCapacity",
+            onDateStart: data.range.range.startDate,
+            onDateEnd: data.range.range.endDate,
+            person: personRow(data.consultant, null),
+            days: [],
+            aggregate: { averageFree: 0, minimumFree: 0, maximumFree: 0, workingDays: 0 },
+          },
+        };
+      }
+      const variation =
+        Math.abs(aggregate.minimumFreeCapacity - aggregate.maximumFreeCapacity) >=
+        CAPACITY_ASSISTANT_BOUNDS.rangeVariationNoticePoints;
+      if (intent.action.focus === "allocations") {
+        return {
+          message: data.allocations.length
+            ? `${fullName(data.consultant)} has ${data.allocations.length} allocation${data.allocations.length === 1 ? "" : "s"} contributing during this range.`
+            : `${fullName(data.consultant)} has no contributing allocations during this range.`,
+          details: {
+            kind: "allocationBreakdown",
+            startDate: data.range.range.startDate,
+            endDate: data.range.range.endDate,
+            allocations: data.allocations,
+          },
+        };
+      }
+      const committedValues = data.range.days.map((day) => day.committedCapacity);
+      const pipelineValues = data.range.days.map((day) => day.pipelineCapacity);
+      const minCommitted = committedValues.length ? Math.min(...committedValues) : 0;
+      const maxCommitted = committedValues.length ? Math.max(...committedValues) : 0;
+      const minPipeline = pipelineValues.length ? Math.min(...pipelineValues) : 0;
+      const maxPipeline = pipelineValues.length ? Math.max(...pipelineValues) : 0;
+      const averageEffective = aggregate.effectiveWorkingCapacity;
+      const utilization =
+        averageEffective > 0
+          ? Math.round((aggregate.averageCommittedCapacity / averageEffective) * 100)
+          : null;
+      const focusMessage =
+        intent.action.focus === "committed"
+          ? `Committed capacity is ${minCommitted}%–${maxCommitted}% across the range.`
+          : intent.action.focus === "pipeline"
+            ? `Pipeline capacity is ${minPipeline}%–${maxPipeline}% across the range.`
+            : intent.action.focus === "utilization"
+              ? utilization === null
+                ? `${fullName(data.consultant)} has no effective working capacity across the requested range; utilization is not defined.`
+                : `${fullName(data.consultant)} is ${utilization}% utilized on average across the range.`
+              : intent.action.focus === "breakdown"
+                ? `Breakdown: ${aggregate.effectiveWorkingCapacity}% average working capacity, ${aggregate.averageCommittedCapacity}% committed, and ${aggregate.averagePipelineCapacity}% pipeline.`
+                : null;
+      return {
+        message:
+          focusMessage ??
+          (variation
+            ? `${fullName(data.consultant)} ranges from ${aggregate.minimumFreeCapacity}% to ${aggregate.maximumFreeCapacity}% free between ${data.range.range.startDate} and ${data.range.range.endDate}.`
+            : `${fullName(data.consultant)} has ${aggregate.averageFreeCapacity}% free throughout the requested range.`),
+        details: {
+          kind: "rangeCapacity",
+          onDateStart: data.range.range.startDate,
+          onDateEnd: data.range.range.endDate,
+          person: personRow(data.consultant, data.range.days[0] ?? null),
+          days: data.range.days.map((day) => ({
+            onDate: day.onDate,
+            free: day.rawFreeCapacity,
+            overAllocated: day.overAllocatedCapacity,
+            committed: day.committedCapacity,
+            pipeline: day.pipelineCapacity,
+            unavailable: day.isUnavailable,
+          })),
+          aggregate: {
+            averageFree: aggregate.averageFreeCapacity,
+            minimumFree: aggregate.minimumFreeCapacity,
+            maximumFree: aggregate.maximumFreeCapacity,
+            workingDays: aggregate.workingDaysConsidered,
+          },
+          utilization,
+        },
+      };
+    }
+    case "getTeamOverviewRange": {
+      const data = result as {
+        range: { startDate: string; endDate: string };
+        days: Array<{
+          onDate: string;
+          effectiveWorkingCapacity: number;
+          committedCapacity: number;
+          pipelineCapacity: number;
+          availableCapacity: number;
+          overAllocatedCapacity: number;
+          unstaffedDemandGap: number;
+        }>;
+        aggregate: {
+          minimumFreeCapacity: number;
+          maximumFreeCapacity: number;
+          averageEffectiveWorkingCapacity?: number;
+          averageCommittedCapacity?: number;
+          averagePipelineCapacity?: number;
+        };
+      };
+      if (!data.days.length) {
+        return {
+          message: `The requested range ${data.range.startDate} to ${data.range.endDate} contains no Monday–Friday working days.`,
+          details: {
+            kind: "rangeOverview",
+            startDate: data.range.startDate,
+            endDate: data.range.endDate,
+            days: [],
+            minimumFree: 0,
+            maximumFree: 0,
+          },
+        };
+      }
+      const focus = intent.action.focus ?? "free";
+      const averageEffective = data.aggregate.averageEffectiveWorkingCapacity ?? 0;
+      const averageCommitted = data.aggregate.averageCommittedCapacity ?? 0;
+      const averagePipeline = data.aggregate.averagePipelineCapacity ?? 0;
+      const message =
+        focus === "committed"
+          ? `The team has ${averageCommitted}% committed capacity across the requested range.`
+          : focus === "pipeline"
+            ? `The team has ${averagePipeline}% pipeline capacity across the requested range.`
+            : focus === "utilization"
+              ? averageEffective > 0
+                ? `The team is ${Math.round((averageCommitted / averageEffective) * 100)}% utilized on average across the requested range.`
+                : "The team has no effective working capacity across the requested range; utilization is not defined."
+              : focus === "breakdown"
+                ? `The team averages ${averageEffective}% working capacity, ${averageCommitted}% committed, and ${averagePipeline}% pipeline across the requested range.`
+                : `The team has ${data.aggregate.minimumFreeCapacity}% to ${data.aggregate.maximumFreeCapacity}% free across the requested range.`;
+      return {
+        message,
+        details: {
+          kind: "rangeOverview",
+          startDate: data.range.startDate,
+          endDate: data.range.endDate,
+          days: data.days.map((day) => ({
+            onDate: day.onDate,
+            free: day.availableCapacity,
+            overAllocated: day.overAllocatedCapacity,
+            committed: day.committedCapacity,
+            pipeline: day.pipelineCapacity,
+            gap: day.unstaffedDemandGap,
+          })),
+          minimumFree: data.aggregate.minimumFreeCapacity,
+          maximumFree: data.aggregate.maximumFreeCapacity,
+        },
+      };
+    }
+    case "findAvailabilityWindows": {
+      const data = result as {
+        windows: Array<{
+          consultant: ConsultantDto;
+          range: { startDate: string; endDate: string };
+          minimumFreeCapacity: number;
+          averageFreeCapacity: number;
+        }>;
+      };
+      return {
+        message: data.windows.length
+          ? `Found ${data.windows.length} qualifying availability window${data.windows.length === 1 ? "" : "s"}.`
+          : "No qualifying availability windows were found.",
+        details: {
+          kind: "availabilityWindows",
+          windows: data.windows.map((window) => ({
+            consultant: fullName(window.consultant),
+            startDate: window.range.startDate,
+            endDate: window.range.endDate,
+            minimumFree: window.minimumFreeCapacity,
+            averageFree: window.averageFreeCapacity,
+          })),
+        },
+      };
+    }
+    case "findStaffingCandidatesRange": {
+      const data = result as {
+        demand: DemandDto;
+        candidates: Array<{
+          consultant: ConsultantDto;
+          range: { aggregate: { minimumFreeCapacity: number; averageFreeCapacity: number } };
+          skillMatch: { count: number };
+          canCoverMinimum: boolean;
+        }>;
+      };
+      return {
+        message: data.candidates.length
+          ? `Here are the best range-aware candidates for ${data.demand.title}.`
+          : `No candidates matched ${data.demand.title} for the full range.`,
+        details: {
+          kind: "people",
+          onDate: null,
+          rows: data.candidates.map((candidate) =>
+            personRow(
+              candidate.consultant,
+              {
+                onDate: "range",
+                includePipeline: false,
+                excludedDemandId: null,
+                normalWorkingCapacity: candidate.consultant.workingCapacity,
+                effectiveWorkingCapacity: candidate.consultant.workingCapacity,
+                committedCapacity: 0,
+                pipelineCapacity: 0,
+                scenarioLoad: 0,
+                rawFreeCapacity: candidate.range.aggregate.minimumFreeCapacity,
+                availableCapacity: Math.max(candidate.range.aggregate.minimumFreeCapacity, 0),
+                overAllocatedCapacity: Math.max(-candidate.range.aggregate.minimumFreeCapacity, 0),
+                isArchived: false,
+                isUnavailable: false,
+                isAvailable: candidate.canCoverMinimum,
+                availabilityBlockId: null,
+              },
+              [
+                `${candidate.skillMatch.count}/${data.demand.skills.length} skills matched`,
+                `${candidate.range.aggregate.minimumFreeCapacity}% minimum free`,
+              ],
+            ),
+          ),
+        },
+      };
+    }
+    case "findSuitableDemands": {
+      const data = result as {
+        demands: Array<{
+          demand: DemandDto;
+          staffing: StaffingSnapshot;
+          skillMatch: { count: number };
+        }>;
+      };
+      return {
+        message: `Found ${data.demands.length} suitable open demand${data.demands.length === 1 ? "" : "s"}.`,
+        details: {
+          kind: "demands",
+          rows: data.demands.map((row) => demandRow(row.demand, row.staffing)),
+        },
+      };
+    }
+    case "skillSupplyDemand": {
+      const data = result as {
+        skills: Array<{ skill: string; consultants: number; demandCount: number }>;
+      };
+      return {
+        message: `Compared ${data.skills.length} exact normalized skill${data.skills.length === 1 ? "" : "s"}.`,
+        details: { kind: "skillSupplyDemand", rows: data.skills },
+      };
+    }
+    case "productHelp": {
+      const answers: Record<string, string> = {
+        pipeline: "Pipeline work is tentative and does not reserve committed capacity.",
+        confirmed: "Confirmed work is Won demand and reserves capacity.",
+        committedCapacity:
+          "Committed capacity is the sum of allocations on Won or In Progress demands active on the date.",
+        workingCapacity:
+          "Working capacity is the consultant's normal percentage, reduced to zero on unavailable days or for archived consultants.",
+        freeCapacity:
+          "Free capacity is effective working capacity minus committed load; it can be negative when someone is overallocated.",
+        overAllocation:
+          "Over-allocation is allowed as an intentional exception and produces a warning rather than blocking a write.",
+        candidateRanking:
+          "Candidates rank by exact skill matches, then deterministic available capacity, then stable name ordering.",
+        includePipeline:
+          "Include pipeline adds Incoming allocations to the planning scenario without changing committed capacity.",
+        rfp: "An RfP is a demand type for a request for proposal and follows the same staffing rules as other demand.",
+        assistantScope:
+          "The assistant can read Capacity Hub data and preview typed changes. Every write needs explicit confirmation; SQL, deletion, and history are unavailable.",
+      };
+      const answer =
+        answers[intent.action.topic] ?? "Capacity Hub help is unavailable for that topic.";
+      return { message: answer, details: { kind: "help", topic: intent.action.topic, answer } };
     }
     case "findStaffingCandidates": {
       const data = result as {
@@ -235,6 +572,8 @@ function readPresentation(
 
 function previewTitle(action: ActionPreview["action"]): string {
   switch (action.kind) {
+    case "createConsultant":
+      return "Create consultant";
     case "updateConsultant":
       return "Update consultant";
     case "createDemand":
@@ -255,6 +594,8 @@ function previewTitle(action: ActionPreview["action"]): string {
 function previewSubject(preview: ActionPreview, labels: Record<string, string>): string {
   const action = preview.action;
   switch (action.kind) {
+    case "createConsultant":
+      return `${action.consultant.name} ${action.consultant.surname}`;
     case "updateConsultant":
       return labels[action.consultantId] ?? "Consultant";
     case "createDemand":
@@ -292,13 +633,24 @@ function unsupportedMessage(
   switch (reason) {
     case "destructive_action":
       return "I can’t perform destructive consultant or demand deletion.";
+    case "multiple_changes":
+      return "I found multiple changes. I’ll keep each preview and confirmation separate; send one change at a time for now.";
     case "missing_information":
       return "I need a little more information before I can form a typed Capacity Hub action.";
     case "outside_capacity_hub":
       return "That request is outside the Capacity Hub actions I can use.";
     case "security_request":
       return "I can’t access credentials, run SQL, use service-role data access, or bypass confirmation.";
+    case "allocation_date_granularity":
+      return "Capacity Hub allocations apply across a demand’s stored date range; date-specific allocation changes are not supported.";
+    case "partial_day_availability":
+      return "Availability blocks use inclusive calendar dates; partial-day availability is not supported.";
+    case "temporary_capacity_schedule":
+      return "Working capacity is stored as one current percentage; temporary date-scoped schedules are not supported.";
+    case "history_undo_unavailable":
+      return "Capacity Hub does not retain assistant history for undo. Review the current state and submit an explicit change instead.";
   }
+  return "That request is not supported.";
 }
 
 function errorResponse(
@@ -306,18 +658,476 @@ function errorResponse(
   message: string,
   currentDate: string,
   retryable = false,
+  context?: ConversationContext,
 ): AssistantResponse {
   return {
     ok: false,
     error: { code, message, ...(retryable ? { retryable: true } : {}) },
     currentDate,
+    ...(context ? { context } : {}),
   };
 }
 
-function actionRequest(intent: ActionableCapacityIntent) {
+function buildConversationContext(
+  intent: ActionableCapacityIntent,
+  previous: ConversationContext | undefined,
+  data: CapacityDataSet,
+): ConversationContext {
+  const context: ConversationContext = { ...(previous ?? {}) };
+  if (intent.type === "relativeWrite") return context;
+  const action = intent.action;
+  const enterScope = (scope: ConversationContext["scope"]) => {
+    const previousScope = context.scope;
+    context.scope = scope;
+    if (scope !== "consultant") context.lastConsultant = undefined;
+    if (scope !== "demand") context.lastDemand = undefined;
+    if (scope === "team") context.explainFocus = undefined;
+    if (scope === "demand" && previousScope !== "demand") {
+      context.lastFocus = undefined;
+      context.explainFocus = undefined;
+      context.includePipeline = undefined;
+    }
+    if (scope === "consultant" && previousScope !== "consultant") {
+      context.lastFocus = undefined;
+      context.explainFocus = undefined;
+    }
+    if (scope === "team" && previousScope !== "team" && context.lastFocus === "allocations") {
+      context.lastFocus = undefined;
+    }
+  };
+  const rememberConsultant = (ref: unknown) => {
+    if (!ref) return;
+    try {
+      const consultant =
+        "name" in (ref as object) && String((ref as { name?: string }).name).toLowerCase() === "me"
+          ? data.consultants.find((item) => item.isCurrentUser)
+          : resolveConsultant(ref as never, data.consultants);
+      if (consultant)
+        context.lastConsultant = {
+          id: consultant.id,
+          label: fullName(consultant),
+          disambiguator: consultant.email,
+        };
+    } catch {
+      // Ambiguity remains a user-facing clarification, not context authority.
+    }
+  };
+  const rememberDemand = (ref: unknown) => {
+    if (!ref) return;
+    try {
+      const demand = resolveDemand(ref as never, data.demands);
+      if (demand)
+        context.lastDemand = {
+          id: demand.id,
+          label: demand.title,
+          disambiguator: demand.client || null,
+        };
+    } catch {
+      // Keep the previous context until the user resolves the current ambiguity.
+    }
+  };
+  if (intent.type === "write") {
+    switch (action.kind) {
+      case "updateConsultant":
+        enterScope("consultant");
+        rememberConsultant(action.consultant);
+        context.lastRange = undefined;
+        break;
+      case "setAllocation":
+      case "removeAllocation":
+        enterScope("demand");
+        if ("demand" in action) rememberDemand(action.demand);
+        context.lastRange = undefined;
+        break;
+      case "addAvailabilityBlock":
+        enterScope("consultant");
+        rememberConsultant(action.consultant);
+        context.lastRange = undefined;
+        break;
+      case "updateDemand":
+        enterScope("demand");
+        rememberDemand(action.demand);
+        context.lastRange = undefined;
+        break;
+      case "createDemand":
+        enterScope("demand");
+        context.lastRange = undefined;
+        break;
+      default:
+        break;
+    }
+  } else {
+    switch (action.kind) {
+      case "getConsultant":
+      case "getCapacity":
+      case "getCapacityRange":
+      case "findSuitableDemands":
+        enterScope("consultant");
+        rememberConsultant(action.consultant);
+        break;
+      case "listDemands":
+        enterScope("demand");
+        break;
+      case "getDemand":
+      case "findStaffingCandidates":
+      case "findStaffingCandidatesRange":
+        enterScope("demand");
+        rememberDemand(action.demand);
+        break;
+      case "getTeamOverview":
+      case "getTeamOverviewRange":
+      case "listConsultants":
+      case "skillSupplyDemand":
+        enterScope("team");
+        break;
+      case "findAvailabilityWindows":
+        if (action.consultant) {
+          enterScope("consultant");
+          rememberConsultant(action.consultant);
+        } else {
+          enterScope("team");
+        }
+        break;
+      default:
+        break;
+    }
+    if ("onDate" in action && action.onDate)
+      context.lastRange = { startDate: action.onDate, endDate: action.onDate };
+    else if ("onDate" in action) context.lastRange = undefined;
+    if ("startDate" in action && "endDate" in action)
+      context.lastRange = { startDate: action.startDate, endDate: action.endDate };
+    if (
+      ["getConsultant", "listConsultants", "listDemands", "getDemand", "productHelp"].includes(
+        action.kind,
+      ) &&
+      !("onDate" in action && action.onDate)
+    ) {
+      context.lastRange = undefined;
+    }
+    if ("includePipeline" in action) context.includePipeline = action.includePipeline;
+    if (action.kind === "getCapacity" || action.kind === "getCapacityRange") {
+      const focus = action.focus ?? "free";
+      if (focus === "breakdown") {
+        context.explainFocus =
+          context.lastFocus === "pipeline"
+            ? "pipeline"
+            : context.lastFocus === "committed"
+              ? "committed"
+              : context.lastFocus === "allocations"
+                ? "allocations"
+                : (context.explainFocus ?? "free");
+        context.lastFocus = "breakdown";
+      } else {
+        context.lastFocus = focus;
+      }
+    } else if (action.kind === "getConsultant") {
+      context.lastFocus = "allocations";
+    } else if (action.kind.includes("Staffing")) {
+      context.lastFocus = "staffing";
+    } else if (action.kind === "findAvailabilityWindows") {
+      context.lastFocus = "availability";
+    } else if (action.kind === "getTeamOverviewRange") {
+      const previousFocus = context.lastFocus;
+      context.lastFocus = action.focus ?? "free";
+      if (action.focus === "breakdown") {
+        context.explainFocus =
+          previousFocus === "pipeline"
+            ? "pipeline"
+            : previousFocus === "committed"
+              ? "committed"
+              : "free";
+      }
+    } else if (action.kind === "getTeamOverview") {
+      context.lastFocus = "free";
+    }
+  }
+  return context;
+}
+
+function actionRequest(
+  intent: ActionableCapacityIntent,
+  expectedPreconditions?: import("@/domain/capacity/contracts").RowVersion[],
+) {
+  if (intent.type === "relativeWrite") {
+    throw new Error("RELATIVE_INTENT_NOT_COMPILED");
+  }
   return intent.type === "read"
     ? ({ mode: "read", action: intent.action } as const)
-    : ({ mode: "preview", action: intent.action, asOfDate: intent.asOfDate } as const);
+    : ({
+        mode: "preview",
+        action: intent.action,
+        asOfDate: intent.asOfDate,
+        ...(expectedPreconditions ? { expectedPreconditions } : {}),
+      } as const);
+}
+
+type PreparedIntent = {
+  intent: Extract<ActionableCapacityIntent, { type: "read" | "write" }>;
+  expectedPreconditions?: import("@/domain/capacity/contracts").RowVersion[];
+};
+
+function relativeVersionSignature(
+  intent: Extract<ActionableCapacityIntent, { type: "relativeWrite" }>,
+  data: CapacityDataSet,
+  actorUserId: string,
+): string {
+  const operation = intent.operation;
+  if (
+    operation.kind === "adjustConsultantCapacity" ||
+    operation.kind === "changeConsultantSkill" ||
+    operation.kind === "updateConsultantProfile"
+  ) {
+    const consultant = resolveConsultant(
+      selfConsultantRef(operation.consultant, data, actorUserId) as never,
+      data.consultants,
+      { activeOnly: true, field: "consultant" },
+    );
+    return `consultants:${consultant.id}:${consultant.updatedAt}:${rowStateFingerprint(data, "consultants", consultant.id)}`;
+  }
+  if (operation.kind === "adjustDemandCapacity") {
+    const demand = resolveDemand(operation.demand, data.demands, { field: "demand" });
+    return `demands:${demand.id}:${demand.updatedAt}:${rowStateFingerprint(data, "demands", demand.id)}`;
+  }
+  const consultant = resolveConsultant(
+    selfConsultantRef(operation.consultant, data, actorUserId) as never,
+    data.consultants,
+    { activeOnly: true, field: "consultant" },
+  );
+  const demand = resolveDemand(operation.demand, data.demands, { field: "demand" });
+  const allocation = data.allocations.find(
+    (item) => item.consultantId === consultant.id && item.demandId === demand.id,
+  );
+  return `allocations:${allocation?.id ?? "missing"}:${allocation?.updatedAt ?? "missing"}:${allocation ? rowStateFingerprint(data, "allocations", allocation.id) : "missing"}`;
+}
+
+function rowStateFingerprint(
+  data: CapacityDataSet,
+  table: import("@/domain/capacity/contracts").RowVersion["table"],
+  id: string,
+): string {
+  const rows =
+    table === "consultants"
+      ? data.consultants
+      : table === "demands"
+        ? data.demands
+        : table === "allocations"
+          ? data.allocations
+          : data.availabilityBlocks;
+  const row = rows.find((item) => item.id === id);
+  return JSON.stringify(row ?? null);
+}
+
+function relativePreconditions(
+  intent: Extract<ActionableCapacityIntent, { type: "relativeWrite" }>,
+  data: CapacityDataSet,
+  actorUserId: string,
+): import("@/domain/capacity/contracts").RowVersion[] {
+  const operation = intent.operation;
+  if (
+    operation.kind === "adjustConsultantCapacity" ||
+    operation.kind === "changeConsultantSkill" ||
+    operation.kind === "updateConsultantProfile"
+  ) {
+    const consultant = resolveConsultant(
+      selfConsultantRef(operation.consultant, data, actorUserId) as never,
+      data.consultants,
+      { activeOnly: true, field: "consultant" },
+    );
+    return [
+      {
+        table: "consultants",
+        id: consultant.id,
+        updatedAt: consultant.updatedAt,
+        stateFingerprint: rowStateFingerprint(data, "consultants", consultant.id),
+      },
+    ];
+  }
+  if (operation.kind === "adjustDemandCapacity") {
+    const demand = resolveDemand(operation.demand, data.demands, { field: "demand" });
+    return [
+      {
+        table: "demands",
+        id: demand.id,
+        updatedAt: demand.updatedAt,
+        stateFingerprint: rowStateFingerprint(data, "demands", demand.id),
+      },
+    ];
+  }
+  const consultant = resolveConsultant(
+    selfConsultantRef(operation.consultant, data, actorUserId) as never,
+    data.consultants,
+    { activeOnly: true, field: "consultant" },
+  );
+  const demand = resolveDemand(operation.demand, data.demands, { field: "demand" });
+  const allocation = data.allocations.find(
+    (item) => item.consultantId === consultant.id && item.demandId === demand.id,
+  );
+  if (!allocation) throw new CapacityActionFailure("NOT_FOUND", "No allocation exists to adjust");
+  return [
+    {
+      table: "allocations",
+      id: allocation.id,
+      updatedAt: allocation.updatedAt,
+      stateFingerprint: rowStateFingerprint(data, "allocations", allocation.id),
+    },
+  ];
+}
+
+async function normalizeIntent(
+  intent: ActionableCapacityIntent,
+  repository: CapacityRepository,
+  actorUserId: string,
+): Promise<PreparedIntent> {
+  let data = await repository.load();
+  if (intent.type !== "relativeWrite")
+    return {
+      intent: materializeSelfReferences(intent, data, actorUserId) as Extract<
+        ActionableCapacityIntent,
+        { type: "read" | "write" }
+      >,
+    };
+  const sourceSignature = relativeVersionSignature(intent, data, actorUserId);
+  let expectedPreconditions = relativePreconditions(intent, data, actorUserId);
+  const latest = await repository.load();
+  if (sourceSignature !== relativeVersionSignature(intent, latest, actorUserId)) {
+    data = latest;
+    expectedPreconditions = relativePreconditions(intent, data, actorUserId);
+  }
+  const operation = intent.operation;
+  const wrap = (action: ProposedAction): PreparedIntent => ({
+    intent: {
+      type: "write",
+      asOfDate: intent.asOfDate,
+      action,
+    } as Extract<ActionableCapacityIntent, { type: "write" }>,
+    expectedPreconditions,
+  });
+  if (operation.kind === "adjustConsultantCapacity") {
+    const consultant = resolveConsultant(
+      selfConsultantRef(operation.consultant, data, actorUserId) as never,
+      data.consultants,
+      {
+        activeOnly: true,
+        field: "consultant",
+      },
+    );
+    const next = consultant.workingCapacity + operation.delta;
+    if (next < 0 || next > 100)
+      throw new CapacityActionFailure(
+        "VALIDATION_ERROR",
+        "Working capacity must remain between 0% and 100%",
+        { field: "workingCapacity" },
+      );
+    return wrap({
+      kind: "updateConsultant",
+      consultant: { consultantId: consultant.id },
+      patch: { workingCapacity: next },
+    });
+  }
+  if (operation.kind === "updateConsultantProfile") {
+    const consultant = resolveConsultant(
+      selfConsultantRef(operation.consultant, data, actorUserId) as never,
+      data.consultants,
+      { activeOnly: true, field: "consultant" },
+    );
+    let skills = consultant.skills;
+    if (operation.skill && operation.operation) {
+      const normalizedSkill = normalizeSkills([operation.skill])[0];
+      const existing = skills.some(
+        (skill) => normalizeSkills([skill])[0].toLowerCase() === normalizedSkill.toLowerCase(),
+      );
+      if (operation.operation === "remove" && !existing)
+        throw new CapacityActionFailure("NOT_FOUND", "That skill is not on the consultant");
+      if (operation.operation === "add" && !existing) skills = [...skills, normalizedSkill];
+      if (operation.operation === "remove")
+        skills = skills.filter(
+          (skill) => normalizeSkills([skill])[0].toLowerCase() !== normalizedSkill.toLowerCase(),
+        );
+    }
+    return wrap({
+      kind: "updateConsultant",
+      consultant: { consultantId: consultant.id },
+      patch: {
+        ...(operation.role ? { role: operation.role } : {}),
+        ...(operation.level ? { level: operation.level } : {}),
+        skills,
+      },
+    });
+  }
+  if (operation.kind === "adjustAllocation") {
+    const consultant = resolveConsultant(
+      selfConsultantRef(operation.consultant, data, actorUserId) as never,
+      data.consultants,
+      {
+        activeOnly: true,
+        field: "consultant",
+      },
+    );
+    const demand = resolveDemand(operation.demand, data.demands, { field: "demand" });
+    const allocation = data.allocations.find(
+      (item) => item.consultantId === consultant.id && item.demandId === demand.id,
+    );
+    if (!allocation) throw new CapacityActionFailure("NOT_FOUND", "No allocation exists to adjust");
+    const next = allocation.capacity + operation.delta;
+    if (next < 5 || next > 100 || next % 5 !== 0)
+      throw new CapacityActionFailure(
+        "VALIDATION_ERROR",
+        "Allocation must remain between 5% and 100% in 5% increments",
+        { field: "capacity" },
+      );
+    return wrap({
+      kind: "setAllocation",
+      consultant: { consultantId: consultant.id },
+      demand: { demandId: demand.id },
+      capacity: next,
+    });
+  }
+  if (operation.kind === "adjustDemandCapacity") {
+    const demand = resolveDemand(operation.demand, data.demands, { field: "demand" });
+    const next = demand.requiredCapacity + operation.delta;
+    if (next < 0 || next > 1000)
+      throw new CapacityActionFailure(
+        "VALIDATION_ERROR",
+        "Required capacity must remain between 0% and 1000%",
+        { field: "requiredCapacity" },
+      );
+    return wrap({
+      kind: "updateDemand",
+      demand: { demandId: demand.id },
+      patch: { requiredCapacity: next },
+    });
+  }
+  const consultant = resolveConsultant(
+    selfConsultantRef(operation.consultant, data, actorUserId) as never,
+    data.consultants,
+    {
+      activeOnly: true,
+      field: "consultant",
+    },
+  );
+  const normalizedSkill = normalizeSkills([operation.skill])[0];
+  const existing = consultant.skills.some(
+    (skill) => normalizeSkills([skill])[0].toLowerCase() === normalizedSkill.toLowerCase(),
+  );
+  if (operation.operation === "add" && existing)
+    return wrap({
+      kind: "updateConsultant",
+      consultant: { consultantId: consultant.id },
+      patch: { skills: consultant.skills },
+    });
+  if (operation.operation === "remove" && !existing)
+    throw new CapacityActionFailure("NOT_FOUND", "That skill is not on the consultant");
+  const skills =
+    operation.operation === "add"
+      ? [...consultant.skills, normalizedSkill]
+      : consultant.skills.filter(
+          (skill) => normalizeSkills([skill])[0].toLowerCase() !== normalizedSkill.toLowerCase(),
+        );
+  return wrap({
+    kind: "updateConsultant",
+    consultant: { consultantId: consultant.id },
+    patch: { skills },
+  });
 }
 
 function ambiguous(result: CapacityActionResponse): {
@@ -328,6 +1138,36 @@ function ambiguous(result: CapacityActionResponse): {
   const field = clarificationFieldSchema.safeParse(result.error.field);
   if (!field.success || !result.error.candidates?.length) return null;
   return { field: field.data, candidates: result.error.candidates };
+}
+
+function clarificationFromFailure(
+  error: CapacityActionFailure,
+  intent: ActionableCapacityIntent,
+  selections: ClarificationSelection[],
+  currentDate: string,
+  context?: ConversationContext,
+): AssistantResponse | null {
+  if (
+    error.detail.code !== "AMBIGUOUS_REFERENCE" ||
+    !error.detail.field ||
+    !error.detail.candidates?.length
+  )
+    return null;
+  const field = clarificationFieldSchema.safeParse(error.detail.field);
+  if (!field.success) return null;
+  return {
+    ok: true,
+    kind: "clarification",
+    message: field.data.includes("demand")
+      ? "Which demand do you mean?"
+      : "Which consultant do you mean?",
+    field: field.data,
+    candidates: error.detail.candidates,
+    intent,
+    selections,
+    currentDate,
+    context,
+  };
 }
 
 function withConsultantId(ref: unknown, candidateId: string) {
@@ -344,14 +1184,60 @@ export function applyClarificationSelection(
   intent: ActionableCapacityIntent,
   selection: ClarificationSelection,
 ): ActionableCapacityIntent {
+  if (intent.type === "relativeWrite") {
+    const operation = intent.operation;
+    if (
+      operation.kind === "adjustConsultantCapacity" ||
+      operation.kind === "changeConsultantSkill" ||
+      operation.kind === "updateConsultantProfile"
+    ) {
+      if (selection.field !== "consultant") throw new Error("INVALID_CLARIFICATION");
+      return {
+        ...intent,
+        operation: {
+          ...operation,
+          consultant: withConsultantId(operation.consultant, selection.candidateId),
+        },
+      } as ActionableCapacityIntent;
+    }
+    if (operation.kind === "adjustAllocation") {
+      if (selection.field === "consultant")
+        return {
+          ...intent,
+          operation: {
+            ...operation,
+            consultant: withConsultantId(operation.consultant, selection.candidateId),
+          },
+        } as ActionableCapacityIntent;
+      if (selection.field === "demand")
+        return {
+          ...intent,
+          operation: {
+            ...operation,
+            demand: withDemandId(operation.demand, selection.candidateId),
+          },
+        } as ActionableCapacityIntent;
+    }
+    if (operation.kind === "adjustDemandCapacity") {
+      if (selection.field !== "demand") throw new Error("INVALID_CLARIFICATION");
+      return {
+        ...intent,
+        operation: { ...operation, demand: withDemandId(operation.demand, selection.candidateId) },
+      } as ActionableCapacityIntent;
+    }
+    throw new Error("INVALID_CLARIFICATION");
+  }
   const action = intent.action;
-  let next: typeof action;
+  let next: typeof action = action;
   switch (action.kind) {
     case "listConsultants":
     case "getTeamOverview":
       throw new Error("INVALID_CLARIFICATION");
     case "getConsultant":
     case "getCapacity":
+    case "getCapacityRange":
+    case "findAvailabilityWindows":
+    case "findSuitableDemands":
       if (selection.field !== "consultant") throw new Error("INVALID_CLARIFICATION");
       next = { ...action, consultant: withConsultantId(action.consultant, selection.candidateId) };
       break;
@@ -361,6 +1247,7 @@ export function applyClarificationSelection(
       break;
     case "getDemand":
     case "findStaffingCandidates":
+    case "findStaffingCandidatesRange":
       if (selection.field !== "demand") throw new Error("INVALID_CLARIFICATION");
       next = { ...action, demand: withDemandId(action.demand, selection.candidateId) };
       break;
@@ -430,6 +1317,7 @@ async function presentActionable(
   result: CapacityActionResponse,
   repository: CapacityRepository,
   currentDate: string,
+  context?: ConversationContext,
 ): Promise<AssistantResponse> {
   const ambiguity = ambiguous(result);
   if (ambiguity) {
@@ -446,13 +1334,27 @@ async function presentActionable(
       intent: originalIntent,
       selections,
       currentDate,
+      context,
     };
   }
   if (!result.ok) return errorResponse(result.error.code, result.error.message, currentDate);
   if (intent.type === "read") {
     const presentation = readPresentation(intent, result.data);
-    return { ok: true, kind: "read", ...presentation, currentDate };
+    const data = await repository.load();
+    return {
+      ok: true,
+      kind: "read",
+      ...presentation,
+      currentDate,
+      context: buildConversationContext(intent, context, data),
+    };
   }
+  if (intent.type === "relativeWrite")
+    return errorResponse(
+      "INVALID_INTENT",
+      "The relative change could not be compiled",
+      currentDate,
+    );
   const preview = result.data as ActionPreview;
   const data = await repository.load();
   return {
@@ -464,6 +1366,7 @@ async function presentActionable(
     action: intent.action,
     preview: sanitizePreview(preview, data),
     currentDate,
+    context: buildConversationContext(intent, context, data),
   };
 }
 
@@ -472,7 +1375,208 @@ async function executeIntent(
   repository: CapacityRepository,
   actorUserId: string,
 ): Promise<CapacityActionResponse> {
-  return executeCapacityAction(actionRequest(intent), repository, actorUserId);
+  const prepared = await normalizeIntent(intent, repository, actorUserId);
+  return executeCapacityAction(
+    actionRequest(prepared.intent, prepared.expectedPreconditions),
+    repository,
+    actorUserId,
+  );
+}
+
+function isSelfRef(ref: unknown): boolean {
+  return (
+    !!ref &&
+    typeof ref === "object" &&
+    "name" in ref &&
+    typeof ref.name === "string" &&
+    /^(i|me|my)$/i.test(ref.name.trim())
+  );
+}
+
+function currentConsultantId(data: CapacityDataSet, actorUserId: string): string {
+  const matches = data.consultants.filter(
+    (consultant) => consultant.isCurrentUser && consultant.linkedToUser,
+  );
+  if (matches.length !== 1) {
+    throw new CapacityActionFailure(
+      "NOT_FOUND",
+      "Your account is not linked to exactly one consultant profile. Create or link your profile first.",
+      { field: "consultant" },
+    );
+  }
+  void actorUserId;
+  return matches[0].id;
+}
+
+function selfConsultantRef(ref: unknown, data: CapacityDataSet, actorUserId: string): unknown {
+  return isSelfRef(ref) ? { consultantId: currentConsultantId(data, actorUserId) } : ref;
+}
+
+function materializeSelfReferences(
+  intent: ActionableCapacityIntent,
+  data: CapacityDataSet,
+  actorUserId: string,
+): ActionableCapacityIntent {
+  if (intent.type === "relativeWrite") return intent;
+  if (intent.type === "read") {
+    const action = intent.action;
+    switch (action.kind) {
+      case "getConsultant":
+      case "getCapacity":
+      case "getCapacityRange":
+      case "findSuitableDemands":
+        return {
+          ...intent,
+          action: {
+            ...action,
+            consultant: selfConsultantRef(action.consultant, data, actorUserId),
+          },
+        } as ActionableCapacityIntent;
+      case "listDemands":
+        return {
+          ...intent,
+          action: {
+            ...action,
+            owner: action.owner ? selfConsultantRef(action.owner, data, actorUserId) : action.owner,
+          },
+        } as ActionableCapacityIntent;
+      case "findAvailabilityWindows":
+        return {
+          ...intent,
+          action: {
+            ...action,
+            consultant: action.consultant
+              ? selfConsultantRef(action.consultant, data, actorUserId)
+              : action.consultant,
+          },
+        } as ActionableCapacityIntent;
+      case "findStaffingCandidates":
+      case "findStaffingCandidatesRange":
+        return intent;
+      default:
+        return intent;
+    }
+  }
+  const action = intent.action;
+  switch (action.kind) {
+    case "updateConsultant":
+    case "setAllocation":
+    case "removeAllocation":
+    case "addAvailabilityBlock":
+      return {
+        ...intent,
+        action: { ...action, consultant: selfConsultantRef(action.consultant, data, actorUserId) },
+      } as ActionableCapacityIntent;
+    case "createDemand":
+      return {
+        ...intent,
+        action: {
+          ...action,
+          demand: {
+            ...action.demand,
+            owner: action.demand.owner
+              ? selfConsultantRef(action.demand.owner, data, actorUserId)
+              : action.demand.owner,
+          },
+        },
+      } as ActionableCapacityIntent;
+    case "updateDemand":
+      return {
+        ...intent,
+        action: {
+          ...action,
+          demand: action.demand,
+          patch: {
+            ...action.patch,
+            owner: action.patch.owner
+              ? selfConsultantRef(action.patch.owner, data, actorUserId)
+              : action.patch.owner,
+          },
+        },
+      } as ActionableCapacityIntent;
+    case "removeAvailabilityBlock":
+      if ("consultant" in action.block)
+        return {
+          ...intent,
+          action: {
+            ...action,
+            block: {
+              ...action.block,
+              consultant: selfConsultantRef(action.block.consultant, data, actorUserId),
+            },
+          },
+        } as ActionableCapacityIntent;
+      return intent;
+    default:
+      return intent;
+  }
+}
+
+function validateConversationContext(
+  context: ConversationContext | undefined,
+  data: CapacityDataSet,
+): ConversationContext | undefined {
+  if (!context) return undefined;
+  const parsed = conversationContextSchema.parse(context);
+  const contextBytes = new TextEncoder().encode(JSON.stringify(parsed)).byteLength;
+  if (contextBytes > CAPACITY_ASSISTANT_BOUNDS.maxContextBytes) {
+    throw new CapacityActionFailure("VALIDATION_ERROR", "Conversation context is too large", {
+      field: "context",
+    });
+  }
+  const validated = structuredClone(parsed) as ConversationContext;
+  if (validated.lastConsultant) {
+    const consultant = data.consultants.find((item) => item.id === validated.lastConsultant!.id);
+    if (!consultant) {
+      throw new CapacityActionFailure(
+        "CONFLICT",
+        "Your previous consultant context is no longer available in the current team data. Please choose the person again.",
+        { field: "context.lastConsultant" },
+      );
+    }
+    validated.lastConsultant = {
+      id: consultant.id,
+      label: fullName(consultant),
+      disambiguator: consultant.email,
+    };
+  }
+  if (validated.scope === "team" && (validated.lastConsultant || validated.lastDemand)) {
+    throw new CapacityActionFailure(
+      "CONFLICT",
+      "Your previous team context is inconsistent. Please ask the team question again.",
+      { field: "context.scope" },
+    );
+  }
+  if (validated.scope === "consultant" && validated.lastDemand) {
+    throw new CapacityActionFailure(
+      "CONFLICT",
+      "Your previous consultant context is inconsistent. Please identify the consultant again.",
+      { field: "context.scope" },
+    );
+  }
+  if (validated.scope === "demand" && validated.lastConsultant) {
+    throw new CapacityActionFailure(
+      "CONFLICT",
+      "Your previous demand context is inconsistent. Please identify the demand again.",
+      { field: "context.scope" },
+    );
+  }
+  if (validated.lastDemand) {
+    const demand = data.demands.find((item) => item.id === validated.lastDemand!.id);
+    if (!demand) {
+      throw new CapacityActionFailure(
+        "CONFLICT",
+        "Your previous demand context is no longer available in the current team data. Please choose the demand again.",
+        { field: "context.lastDemand" },
+      );
+    }
+    validated.lastDemand = {
+      id: demand.id,
+      label: demand.title,
+      disambiguator: demand.client || null,
+    };
+  }
+  return validated;
 }
 
 async function clarify(
@@ -481,11 +1585,47 @@ async function clarify(
   repository: CapacityRepository,
   actorUserId: string,
   currentDate: string,
+  context?: ConversationContext,
 ): Promise<AssistantResponse> {
   let working = originalIntent;
   const applied: ClarificationSelection[] = [];
   for (const selection of selections) {
-    const result = await executeIntent(working, repository, actorUserId);
+    let result: CapacityActionResponse;
+    try {
+      result = await executeIntent(working, repository, actorUserId);
+    } catch (error) {
+      if (error instanceof CapacityActionFailure) {
+        const field = clarificationFieldSchema.safeParse(error.detail.field);
+        if (
+          error.detail.code === "AMBIGUOUS_REFERENCE" &&
+          field.success &&
+          field.data === selection.field &&
+          error.detail.candidates?.some((candidate) => candidate.id === selection.candidateId)
+        ) {
+          try {
+            working = applyClarificationSelection(working, selection);
+            applied.push(selection);
+            continue;
+          } catch {
+            return errorResponse(
+              "INVALID_CLARIFICATION",
+              "That choice cannot be applied.",
+              currentDate,
+            );
+          }
+        }
+        const clarification = clarificationFromFailure(
+          error,
+          originalIntent,
+          applied,
+          currentDate,
+          context,
+        );
+        if (clarification) return clarification;
+        return errorResponse(error.detail.code, error.detail.message, currentDate);
+      }
+      throw error;
+    }
     const ambiguity = ambiguous(result);
     if (
       !ambiguity ||
@@ -506,8 +1646,38 @@ async function clarify(
     }
     applied.push(selection);
   }
-  const result = await executeIntent(working, repository, actorUserId);
-  return presentActionable(working, originalIntent, applied, result, repository, currentDate);
+  let prepared: PreparedIntent;
+  let result: CapacityActionResponse;
+  try {
+    prepared = await normalizeIntent(working, repository, actorUserId);
+    result = await executeCapacityAction(
+      actionRequest(prepared.intent, prepared.expectedPreconditions),
+      repository,
+      actorUserId,
+    );
+  } catch (error) {
+    if (error instanceof CapacityActionFailure) {
+      const clarification = clarificationFromFailure(
+        error,
+        originalIntent,
+        applied,
+        currentDate,
+        context,
+      );
+      if (clarification) return clarification;
+      return errorResponse(error.detail.code, error.detail.message, currentDate);
+    }
+    throw error;
+  }
+  return presentActionable(
+    prepared.intent,
+    originalIntent,
+    applied,
+    result,
+    repository,
+    currentDate,
+    context,
+  );
 }
 
 async function confirm(
@@ -576,14 +1746,40 @@ export async function handleCapacityAssistant(
   options: { signal?: AbortSignal; currentDate?: string; interpret?: Interpreter } = {},
 ): Promise<AssistantResponse> {
   const currentDate = options.currentDate ?? todayIsoDate();
+  const currentData = await repository.load();
+  let validatedContext: ConversationContext | undefined;
+  try {
+    validatedContext = validateConversationContext(
+      request.mode === "confirm" ? undefined : request.context,
+      currentData,
+    );
+  } catch (error) {
+    if (error instanceof CapacityActionFailure) {
+      return errorResponse("CONTEXT_INVALIDATED", error.detail.message, currentDate, true, {});
+    }
+    throw error;
+  }
   if (request.mode === "confirm") return confirm(request, repository, actorUserId, currentDate);
   if (request.mode === "clarify") {
-    return clarify(request.intent, request.selections, repository, actorUserId, currentDate);
+    return clarify(
+      request.intent,
+      request.selections,
+      repository,
+      actorUserId,
+      currentDate,
+      validatedContext,
+    );
   }
 
   const interpret =
     options.interpret ?? (await import("./assistant-interpreter.server")).interpretCapacityMessage;
-  const intent = await interpret(request.message, currentDate, options.signal);
+  const intent = await interpret(
+    request.message,
+    currentDate,
+    options.signal,
+    validatedContext,
+    currentData.consultants.map((consultant) => fullName(consultant)),
+  );
   if (intent.type === "unsupported") {
     return {
       ok: true,
@@ -591,8 +1787,38 @@ export async function handleCapacityAssistant(
       message: unsupportedMessage(intent.reason),
       reason: intent.reason,
       currentDate,
+      context: validatedContext,
     };
   }
-  const result = await executeIntent(intent, repository, actorUserId);
-  return presentActionable(intent, intent, [], result, repository, currentDate);
+  let preparedIntent: PreparedIntent;
+  try {
+    preparedIntent = await normalizeIntent(intent, repository, actorUserId);
+  } catch (error) {
+    if (error instanceof CapacityActionFailure) {
+      const clarification = clarificationFromFailure(
+        error,
+        intent,
+        [],
+        currentDate,
+        validatedContext,
+      );
+      if (clarification) return clarification;
+      return errorResponse(error.detail.code, error.detail.message, currentDate);
+    }
+    throw error;
+  }
+  const result = await executeCapacityAction(
+    actionRequest(preparedIntent.intent, preparedIntent.expectedPreconditions),
+    repository,
+    actorUserId,
+  );
+  return presentActionable(
+    preparedIntent.intent,
+    intent,
+    [],
+    result,
+    repository,
+    currentDate,
+    validatedContext,
+  );
 }

@@ -155,6 +155,14 @@ function stale(): never {
   throw new CapacityActionFailure("STALE_PREVIEW", "The underlying data changed");
 }
 
+function duplicateConsultantEmail(): never {
+  throw new CapacityActionFailure(
+    "CONFLICT",
+    "A consultant already uses this email. Ask them to join or link that profile instead.",
+    { field: "consultant.email" },
+  );
+}
+
 export class SupabaseCapacityRepository implements CapacityRepository {
   readonly #client: SupabaseClient<Database>;
   readonly #actorUserId: string;
@@ -199,6 +207,30 @@ export class SupabaseCapacityRepository implements CapacityRepository {
       throw new CapacityActionFailure("FORBIDDEN", "Authenticated user context changed");
     }
     switch (action.kind) {
+      case "createConsultant": {
+        const payload: TablesInsert<"consultants"> = {
+          name: action.consultant.name,
+          surname: action.consultant.surname,
+          email: action.consultant.email,
+          level: action.consultant.level,
+          role: action.consultant.role,
+          skills: action.consultant.skills,
+          working_capacity: action.consultant.workingCapacity,
+          archived_at: null,
+          // user_id is intentionally omitted: assistant-created roster entries stay unlinked.
+        };
+        const { data, error } = await this.#client
+          .from("consultants")
+          .insert(payload)
+          .select(CONSULTANT_COLUMNS)
+          .single();
+        if (error?.code === "23505") duplicateConsultantEmail();
+        if (error || !data) conflict();
+        return {
+          entityId: (data as ConsultantRow).id,
+          changedFields: preview.changes.map((change) => change.field),
+        };
+      }
       case "updateConsultant": {
         const payload: TablesUpdate<"consultants"> = {};
         if (action.patch.name !== undefined) payload.name = action.patch.name;

@@ -67,6 +67,12 @@ class MemoryRepository implements CapacityRepository {
 
   async apply(action: ResolvedAction, preview: ActionPreview): Promise<RepositoryMutation> {
     this.applyCount++;
+    if (action.kind === "updateConsultant") {
+      const item = this.data.consultants.find((row) => row.id === action.consultantId)!;
+      Object.assign(item, action.patch);
+      item.updatedAt = "2026-09-15T10:02:00.000Z";
+      return { entityId: item.id, changedFields: preview.changes.map((change) => change.field) };
+    }
     if (action.kind !== "setAllocation") throw new Error("Unexpected mutation");
     const existing = this.data.allocations.find((item) => item.id === action.allocationId);
     if (existing) {
@@ -231,6 +237,43 @@ describe("Capacity assistant orchestration", () => {
     expect(tampered).toMatchObject({ ok: false, error: { code: "CLARIFICATION_STALE" } });
   });
 
+  test("relative ambiguity uses the normal candidate flow before compiling arithmetic", async () => {
+    repository.data.consultants[0].workingCapacity = 50;
+    const relative: CapacityIntent = {
+      type: "relativeWrite",
+      operation: {
+        kind: "adjustConsultantCapacity",
+        consultant: { name: "Alex" },
+        delta: 10,
+      },
+      asOfDate: "2026-09-15",
+    };
+    const first = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase Alex by 10%" },
+      repository,
+      ACTOR,
+      { currentDate: "2026-09-15", interpret: interpreter(relative) },
+    );
+    expect(first).toMatchObject({ ok: true, kind: "clarification", field: "consultant" });
+    if (!first.ok || first.kind !== "clarification") throw new Error("Expected clarification");
+    const selected = await handleCapacityAssistant(
+      {
+        mode: "clarify",
+        intent: first.intent,
+        selections: [{ field: first.field, candidateId: ALEX_ONE }],
+      },
+      repository,
+      ACTOR,
+      { currentDate: "2026-09-15" },
+    );
+    expect(selected).toMatchObject({
+      ok: true,
+      kind: "preview",
+      preview: { changes: [{ after: 60 }] },
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
   test("unsupported intent cannot reach the repository mutation path", async () => {
     const response = await handleCapacityAssistant(
       { mode: "interpret", message: "Delete everyone" },
@@ -243,5 +286,263 @@ describe("Capacity assistant orchestration", () => {
     );
     expect(response).toMatchObject({ ok: true, kind: "unsupported" });
     expect(repository.applyCount).toBe(0);
+  });
+
+  test("compound mutation requests are refused without a partial preview", async () => {
+    for (const message of [
+      "Set Phoenix to Won and assign Karim 50%.",
+      "Put Karim 50% and Maya 40% on Phoenix.",
+      "Create Apollo, then assign Karim 50%.",
+      "Explain pipeline and set Apollo to Won.",
+    ]) {
+      const response = await handleCapacityAssistant(
+        { mode: "interpret", message },
+        repository,
+        ACTOR,
+        { currentDate: "2026-09-15" },
+      );
+      expect(response).toMatchObject({ ok: true, kind: "unsupported", reason: "multiple_changes" });
+    }
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("rebases a relative consultant update after a concurrent current-state change", async () => {
+    let loads = 0;
+    const changingRepository: CapacityRepository = {
+      async load() {
+        loads += 1;
+        if (loads === 2) repository.data.consultants[1].workingCapacity = 70;
+        return structuredClone(repository.data);
+      },
+      apply: (action, preview, actor) => repository.apply(action, preview, actor),
+    };
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase Alex by 10%" },
+      changingRepository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: async () => ({
+          type: "relativeWrite",
+          operation: {
+            kind: "adjustConsultantCapacity",
+            consultant: { name: "Alex Smith" },
+            delta: 10,
+          },
+          asOfDate: "2026-09-15",
+        }),
+      },
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      kind: "preview",
+      preview: { changes: [{ after: 80 }] },
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("rejects a change injected immediately before the authoritative Phase 2 preview read", async () => {
+    repository.data.consultants[1].workingCapacity = 50;
+    let loads = 0;
+    const raceRepository: CapacityRepository = {
+      async load() {
+        loads += 1;
+        if (loads === 4) repository.data.consultants[1].workingCapacity = 70;
+        return structuredClone(repository.data);
+      },
+      apply: (action, preview, actor) => repository.apply(action, preview, actor),
+    };
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase Alex by 10%" },
+      raceRepository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: async () => ({
+          type: "relativeWrite",
+          operation: {
+            kind: "adjustConsultantCapacity",
+            consultant: { name: "Alex Smith" },
+            delta: 10,
+          },
+          asOfDate: "2026-09-15",
+        }),
+      },
+    );
+    expect(response).toMatchObject({ ok: false, error: { code: "STALE_PREVIEW" } });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("resolves relative me/my references through the authenticated consultant", async () => {
+    repository.data.consultants[0].workingCapacity = 60;
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase my capacity by 10%" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: async () => ({
+          type: "relativeWrite",
+          operation: { kind: "adjustConsultantCapacity", consultant: { name: "me" }, delta: 10 },
+          asOfDate: "2026-09-15",
+        }),
+      },
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      kind: "preview",
+      preview: { changes: [{ after: 70 }] },
+    });
+  });
+
+  test("resolves self-reference reads through the linked consultant profile", async () => {
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "How much capacity do I have next week?" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: interpreter({
+          type: "read",
+          action: {
+            kind: "getCapacityRange",
+            consultant: { name: "me" },
+            startDate: "2026-09-21",
+            endDate: "2026-09-25",
+            includePipeline: false,
+            focus: "free",
+          },
+          presentation: "default",
+        }),
+      },
+    );
+    expect(response).toMatchObject({ ok: true, kind: "read", context: { scope: "consultant" } });
+    if (response.ok && response.kind === "read")
+      expect(response.context?.lastConsultant?.id).toBe(ALEX_ONE);
+  });
+
+  test("team scope clears consultant context rather than merging subjects", async () => {
+    const response = await handleCapacityAssistant(
+      {
+        mode: "interpret",
+        message: "How much free capacity does the team have?",
+        context: {
+          scope: "consultant",
+          lastConsultant: { id: ALEX_TWO, label: "Alex Smith" },
+          lastRange: { startDate: "2026-09-15", endDate: "2026-09-15" },
+        },
+      },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: async () => ({
+          type: "read",
+          action: { kind: "getTeamOverview", onDate: "2026-09-15", includePipeline: false },
+          presentation: "default",
+        }),
+      },
+    );
+    expect(response).toMatchObject({ ok: true, kind: "read", context: { scope: "team" } });
+    if (response.ok && response.kind === "read")
+      expect(response.context?.lastConsultant).toBeUndefined();
+  });
+
+  test("weekend-only team ranges explain that no working days are present", async () => {
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "What is the team capacity Saturday and Sunday?" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: interpreter({
+          type: "read",
+          action: {
+            kind: "getTeamOverviewRange",
+            startDate: "2026-09-19",
+            endDate: "2026-09-20",
+            includePipeline: false,
+            focus: "free",
+          },
+          presentation: "default",
+        }),
+      },
+    );
+    expect(response).toMatchObject({ ok: true, kind: "read" });
+    if (response.ok && response.kind === "read") {
+      expect(response.message).toContain("no Monday–Friday working days");
+      expect(response.message).not.toMatch(/0%.*0%/);
+      expect(response.details).toMatchObject({ kind: "rangeOverview", days: [] });
+    }
+  });
+
+  test("refreshes context display metadata from the exact authoritative selector", async () => {
+    repository.data.consultants[0].email = "alex@example.com";
+    const response = await handleCapacityAssistant(
+      {
+        mode: "interpret",
+        message: "Why?",
+        context: {
+          scope: "consultant",
+          lastConsultant: { id: ALEX_ONE, label: "Wrong Alex", disambiguator: "stale@example.com" },
+          lastRange: { startDate: "2026-09-15", endDate: "2026-09-15" },
+          lastFocus: "free",
+        },
+      },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: async () => ({
+          type: "read",
+          action: {
+            kind: "getCapacity",
+            consultant: { consultantId: ALEX_ONE },
+            onDate: "2026-09-15",
+            includePipeline: false,
+            focus: "breakdown",
+          },
+          presentation: "default",
+        }),
+      },
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      context: {
+        lastConsultant: { id: ALEX_ONE, label: "Alex Meyer", disambiguator: "alex@example.com" },
+      },
+    });
+  });
+
+  test("returns an authoritative cleared context when the selector disappears", async () => {
+    const response = await handleCapacityAssistant(
+      {
+        mode: "interpret",
+        message: "Why?",
+        context: {
+          scope: "consultant",
+          lastConsultant: { id: "99999999-9999-4999-8999-999999999999", label: "Alex Smith" },
+        },
+      },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: async () => ({
+          type: "read",
+          action: { kind: "getTeamOverview", onDate: "2026-09-15", includePipeline: false },
+          presentation: "default",
+        }),
+      },
+    );
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_INVALIDATED" },
+      context: {},
+    });
   });
 });

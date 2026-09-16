@@ -11,6 +11,7 @@ import type {
 import { CapacityActionFailure } from "@/domain/capacity/errors";
 import { buildActionPreview, computeActionImpact } from "@/domain/capacity/previews";
 import { executeReadAction } from "@/domain/capacity/reads";
+import { CAPACITY_ASSISTANT_BOUNDS } from "./bounds.server";
 import type { CapacityRepository } from "./repository";
 
 export type CapacityActionResponse =
@@ -32,6 +33,9 @@ function recordForAction(
 ): JsonValue | null {
   let value: unknown = null;
   switch (action.kind) {
+    case "createConsultant":
+      value = entityId ? (data.consultants.find((item) => item.id === entityId) ?? null) : null;
+      break;
     case "updateConsultant":
       value = data.consultants.find((item) => item.id === action.consultantId) ?? null;
       break;
@@ -97,14 +101,30 @@ export async function executeCapacityAction(
   try {
     if (request.mode === "read") {
       const data = await repository.load();
-      return { ok: true, data: executeReadAction(request.action, data) };
+      return {
+        ok: true,
+        data: executeReadAction(request.action, data, CAPACITY_ASSISTANT_BOUNDS),
+      };
     }
 
     const current = await repository.load();
     let preview: ActionPreview;
     try {
-      preview = await buildActionPreview(request.action, current, request.asOfDate, actorUserId);
+      preview = await buildActionPreview(
+        request.action,
+        current,
+        request.asOfDate,
+        actorUserId,
+        request.mode === "preview" ? request.expectedPreconditions : undefined,
+      );
     } catch (error) {
+      if (
+        request.mode === "preview" &&
+        error instanceof CapacityActionFailure &&
+        error.detail.code === "STALE_PREVIEW"
+      ) {
+        return { ok: false, error: error.detail, replacementPreview: null };
+      }
       if (request.mode === "confirm" && error instanceof CapacityActionFailure) {
         return {
           ok: false,

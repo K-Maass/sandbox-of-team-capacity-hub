@@ -132,6 +132,18 @@ describe("Capacity Hub action validation and resolution", () => {
         mode: "preview",
         asOfDate: "2026-09-15",
         action: {
+          kind: "addAvailabilityBlock",
+          consultant: { name: "Alex" },
+          startDate: "2026-09-25",
+          endDate: "2026-09-21",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      capacityActionRequestSchema.safeParse({
+        mode: "preview",
+        asOfDate: "2026-09-15",
+        action: {
           kind: "setAllocation",
           consultant: { name: "Alex Smith" },
           demand: { title: "Apollo", client: "One" },

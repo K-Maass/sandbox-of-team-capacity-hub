@@ -140,11 +140,22 @@ export function getSkillMatch(
   consultantSkills: string[],
   demandSkills: string[],
 ): { count: number; matched: string[]; missing: string[] } {
-  const consultantSet = new Set(consultantSkills.map((skill) => skill.toLowerCase()));
+  const consultantSet = new Set(
+    consultantSkills.map((skill) => skill.trim().replace(/\s+/g, " ").toLowerCase()),
+  );
+  const seen = new Set<string>();
+  const normalizedDemand = demandSkills
+    .map((skill) => skill.trim().replace(/\s+/g, " "))
+    .filter((skill) => {
+      const key = skill.toLowerCase();
+      if (!skill || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   return {
-    count: skillMatchCount(consultantSkills, demandSkills),
-    matched: demandSkills.filter((skill) => consultantSet.has(skill.toLowerCase())),
-    missing: demandSkills.filter((skill) => !consultantSet.has(skill.toLowerCase())),
+    count: normalizedDemand.filter((skill) => consultantSet.has(skill.toLowerCase())).length,
+    matched: normalizedDemand.filter((skill) => consultantSet.has(skill.toLowerCase())),
+    missing: normalizedDemand.filter((skill) => !consultantSet.has(skill.toLowerCase())),
   };
 }
 

@@ -17,6 +17,7 @@ import type {
   AssistantReadDetails,
   AssistantRequest,
   AssistantResponse,
+  ConversationContext,
 } from "@/domain/capacity/assistant";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/data";
@@ -116,11 +117,20 @@ function ReadCard({ details }: { details: AssistantReadDetails }) {
     );
   }
   if (details.kind === "capacity") {
+    const overAllocated = (details.person.rawFreeCapacity ?? 0) < 0;
     return (
       <div className="rounded-lg border bg-background p-3 text-sm">
         <div className="flex justify-between">
           <span className="font-medium">{details.person.name}</span>
-          <Badge variant="secondary">{details.person.availableCapacity}% free</Badge>
+          <Badge variant="secondary">
+            {details.archived
+              ? "Archived"
+              : details.unavailable
+                ? "Unavailable"
+                : overAllocated
+                  ? `${Math.abs(details.person.rawFreeCapacity ?? 0)}% overallocated`
+                  : `${details.person.availableCapacity}% free`}
+          </Badge>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
           <span>Committed {details.committedCapacity}%</span>
@@ -129,6 +139,14 @@ function ReadCard({ details }: { details: AssistantReadDetails }) {
         {details.unavailable && (
           <p className="mt-2 text-xs text-warning-foreground">Marked unavailable on this date.</p>
         )}
+        {details.allocations?.map((allocation) => (
+          <p
+            key={`${allocation.demand}-${allocation.classification}`}
+            className="mt-1 text-xs text-muted-foreground"
+          >
+            {allocation.demand} · {allocation.capacity}% {allocation.classification}
+          </p>
+        ))}
       </div>
     );
   }
@@ -148,6 +166,120 @@ function ReadCard({ details }: { details: AssistantReadDetails }) {
           <p key={allocation.id} className="mt-1 text-xs text-muted-foreground">
             {allocation.name} · {allocation.capacity}%
           </p>
+        ))}
+      </div>
+    );
+  }
+  if (details.kind === "rangeCapacity") {
+    return (
+      <div className="space-y-2 rounded-lg border bg-background p-3 text-xs">
+        <p className="font-medium">
+          {details.onDateStart} → {details.onDateEnd}
+        </p>
+        <p>
+          Free: {details.aggregate.minimumFree}%–{details.aggregate.maximumFree}% (average{" "}
+          {details.aggregate.averageFree}%)
+        </p>
+        {details.utilization !== undefined && (
+          <p>
+            Utilization: {details.utilization === null ? "not defined" : `${details.utilization}%`}
+          </p>
+        )}
+        <div className="space-y-1 text-muted-foreground">
+          {details.days.map((day) => (
+            <p key={day.onDate}>
+              {day.onDate}:{" "}
+              {day.free < 0 ? `0% free · ${day.overAllocated}% overallocated` : `${day.free}% free`}{" "}
+              · {day.committed}% committed
+              {day.pipeline ? ` · ${day.pipeline}% pipeline` : ""}
+              {day.unavailable ? " · unavailable" : ""}
+            </p>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  if (details.kind === "availabilityWindows") {
+    return (
+      <div className="space-y-2">
+        {details.windows.map((window) => (
+          <div
+            key={`${window.consultant}-${window.startDate}`}
+            className="rounded-lg border bg-background p-3 text-xs"
+          >
+            <p className="font-medium">{window.consultant}</p>
+            <p>
+              {window.startDate} → {window.endDate}
+            </p>
+            <p className="text-muted-foreground">
+              {window.minimumFree}% minimum free · {window.averageFree}% average
+            </p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (details.kind === "help") {
+    return <div className="rounded-lg border bg-background p-3 text-xs">{details.answer}</div>;
+  }
+  if (details.kind === "skillSupplyDemand") {
+    return (
+      <div className="space-y-2">
+        {details.rows.map((row) => (
+          <div
+            key={row.skill}
+            className="flex justify-between rounded-lg border bg-background p-3 text-xs"
+          >
+            <span>{row.skill}</span>
+            <span>
+              {row.consultants} people · {row.demandCount} demands
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (details.kind === "rangeOverview") {
+    if (!details.days.length) {
+      return (
+        <div className="rounded-lg border bg-background p-3 text-xs">
+          No Monday–Friday working days are present in the requested range.
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-2 rounded-lg border bg-background p-3 text-xs">
+        <p>
+          Free range: {details.minimumFree}%–{details.maximumFree}%
+        </p>
+        {details.days.map((day) => (
+          <p key={day.onDate}>
+            {day.onDate}: {day.free}% free
+            {day.overAllocated ? ` · ${day.overAllocated}% overallocated` : ""} · {day.committed}%
+            committed · {day.gap}% staffing gap
+          </p>
+        ))}
+      </div>
+    );
+  }
+  if (details.kind === "allocationBreakdown") {
+    return (
+      <div className="space-y-2">
+        {details.allocations.map((allocation) => (
+          <div
+            key={`${allocation.demand}-${allocation.classification}`}
+            className="rounded-lg border bg-background p-3 text-xs"
+          >
+            <div className="flex justify-between">
+              <span className="font-medium">{allocation.demand}</span>
+              <Badge variant="secondary">
+                {allocation.capacity}% {allocation.classification}
+              </Badge>
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              Active on {allocation.activeDays.join(", ")}
+            </p>
+          </div>
         ))}
       </div>
     );
@@ -237,6 +369,7 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [conversationContext, setConversationContext] = useState<ConversationContext | undefined>();
   const [pending, setPending] = useState(false);
   const [pendingMode, setPendingMode] = useState<AssistantRequest["mode"] | null>(null);
   const [resolvedCards, setResolvedCards] = useState<Set<string>>(() => new Set());
@@ -266,13 +399,25 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
         const { data } = await supabase.auth.getSession();
         const token = data.session?.access_token;
         if (!token) throw new Error("UNAUTHORIZED");
+        const requestBody =
+          body.mode === "interpret" || body.mode === "clarify"
+            ? { ...body, context: body.context ?? conversationContext }
+            : body;
         const response = await fetch("/api/ai/capacity", {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify(requestBody),
           signal: controller.signal,
         });
         const payload = (await response.json()) as AssistantResponse;
+        if (payload.context) setConversationContext(payload.context);
+        if (
+          !payload.ok &&
+          (payload.error.code === "CONTEXT_INVALIDATED" ||
+            (payload.error.code === "CONFLICT" && payload.error.message.includes("context")) ||
+            (payload.error.code === "VALIDATION_ERROR" && body.mode !== "confirm"))
+        )
+          setConversationContext(undefined);
         setMessages((items) => [
           ...items,
           { id: crypto.randomUUID(), role: "assistant", response: payload, request: body },
@@ -301,7 +446,7 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
         setPendingMode(null);
       }
     },
-    [invalidateCapacity],
+    [conversationContext, invalidateCapacity],
   );
 
   const submit = (event?: FormEvent) => {
@@ -327,6 +472,32 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
               <Sparkles className="h-4 w-4 text-accent" /> Capacity Assistant
             </SheetTitle>
             <SheetDescription>Ask about capacity or preview a staffing change.</SheetDescription>
+            {conversationContext &&
+              (conversationContext.lastConsultant ||
+                conversationContext.lastDemand ||
+                conversationContext.lastRange) && (
+                <div className="flex items-center justify-between gap-2 pt-1 text-[11px] text-muted-foreground">
+                  <span className="truncate">
+                    {[
+                      conversationContext.lastConsultant?.label,
+                      conversationContext.lastDemand?.label,
+                      conversationContext.lastRange?.label ??
+                        (conversationContext.lastRange &&
+                          `${conversationContext.lastRange.startDate} → ${conversationContext.lastRange.endDate}`),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => setConversationContext(undefined)}
+                  >
+                    Reset context
+                  </Button>
+                </div>
+              )}
           </SheetHeader>
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-4 p-4">

@@ -1,16 +1,11 @@
 import { z } from "zod";
 import { isDateRangeOrdered, normalizeSkills } from "./form-validation";
+import { calendarDateSchema } from "./assistant-context";
 
 const nonEmpty = z.string().trim().min(1);
 const optionalText = z.string().transform((value) => value.trim());
 
-function isCalendarDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
-}
-
-export const isoDateSchema = z.string().refine(isCalendarDate, "Expected a valid YYYY-MM-DD date");
+export const isoDateSchema = calendarDateSchema;
 export const uuidSchema = z.string().uuid();
 export const levelSchema = z.enum(["Junior", "Consultant", "Senior", "Manager", "Partner"]);
 export const roleSchema = z.enum([
@@ -84,6 +79,23 @@ const updateConsultantSchema = z
   })
   .strict();
 
+const createConsultantSchema = z
+  .object({
+    kind: z.literal("createConsultant"),
+    consultant: z
+      .object({
+        name: nonEmpty,
+        surname: nonEmpty,
+        email: z.string().trim().email().nullable().default(null),
+        level: levelSchema.default("Consultant"),
+        role: roleSchema.default("Strategy"),
+        skills: skillsSchema.default([]),
+        workingCapacity: z.number().int().min(0).max(100).default(100),
+      })
+      .strict(),
+  })
+  .strict();
+
 const updateDemandPatchSchema = createDemandFieldsObject
   .partial()
   .strict()
@@ -93,55 +105,76 @@ const updateDemandPatchSchema = createDemandFieldsObject
     path: ["endDate"],
   });
 
-export const proposedActionSchema = z.union([
-  updateConsultantSchema,
-  z.object({ kind: z.literal("createDemand"), demand: createDemandFieldsSchema }).strict(),
-  z
-    .object({
-      kind: z.literal("updateDemand"),
-      demand: demandRefSchema,
-      patch: updateDemandPatchSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("setAllocation"),
-      consultant: consultantRefSchema,
-      demand: demandRefSchema,
-      capacity: z
-        .number()
-        .int()
-        .min(5)
-        .max(100)
-        .refine((value) => value % 5 === 0, "Allocation capacity must use 5% increments"),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("removeAllocation"),
-      consultant: consultantRefSchema,
-      demand: demandRefSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("addAvailabilityBlock"),
-      consultant: consultantRefSchema,
-      startDate: isoDateSchema,
-      endDate: isoDateSchema,
-      note: optionalText.default(""),
-    })
-    .strict()
-    .refine((value) => isDateRangeOrdered(value.startDate, value.endDate), {
-      message: "End date cannot be before start date",
-      path: ["endDate"],
-    }),
-  z
-    .object({ kind: z.literal("removeAvailabilityBlock"), block: availabilityBlockRefSchema })
-    .strict(),
-]);
+export const proposedActionSchema = z
+  .union([
+    createConsultantSchema,
+    updateConsultantSchema,
+    z.object({ kind: z.literal("createDemand"), demand: createDemandFieldsSchema }).strict(),
+    z
+      .object({
+        kind: z.literal("updateDemand"),
+        demand: demandRefSchema,
+        patch: updateDemandPatchSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("setAllocation"),
+        consultant: consultantRefSchema,
+        demand: demandRefSchema,
+        capacity: z
+          .number()
+          .int()
+          .min(5)
+          .max(100)
+          .refine((value) => value % 5 === 0, "Allocation capacity must use 5% increments"),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("removeAllocation"),
+        consultant: consultantRefSchema,
+        demand: demandRefSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("addAvailabilityBlock"),
+        consultant: consultantRefSchema,
+        startDate: isoDateSchema,
+        endDate: isoDateSchema,
+        note: optionalText.default(""),
+      })
+      .strict(),
+    z
+      .object({ kind: z.literal("removeAvailabilityBlock"), block: availabilityBlockRefSchema })
+      .strict(),
+  ])
+  .superRefine((value, ctx) => {
+    if (
+      value.kind === "addAvailabilityBlock" &&
+      !isDateRangeOrdered(value.startDate, value.endDate)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "End date cannot be before start date",
+        path: ["endDate"],
+      });
+    }
+    if (
+      value.kind === "removeAvailabilityBlock" &&
+      "consultant" in value.block &&
+      !isDateRangeOrdered(value.block.startDate, value.block.endDate)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "End date cannot be before start date",
+        path: ["block", "endDate"],
+      });
+    }
+  });
 
-export const readActionSchema = z.discriminatedUnion("kind", [
+const readActionBaseSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("listConsultants"),
@@ -188,6 +221,90 @@ export const readActionSchema = z.discriminatedUnion("kind", [
       consultant: consultantRefSchema,
       onDate: isoDateSchema,
       includePipeline: z.boolean().default(false),
+      focus: z
+        .enum(["free", "committed", "pipeline", "utilization", "breakdown", "allocations"])
+        .default("free"),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("getCapacityRange"),
+      consultant: consultantRefSchema,
+      startDate: isoDateSchema,
+      endDate: isoDateSchema,
+      includePipeline: z.boolean().default(false),
+      focus: z
+        .enum(["free", "committed", "pipeline", "utilization", "breakdown", "allocations"])
+        .default("free"),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("getTeamOverviewRange"),
+      startDate: isoDateSchema,
+      endDate: isoDateSchema,
+      includePipeline: z.boolean().default(false),
+      role: roleSchema.optional(),
+      level: levelSchema.optional(),
+      focus: z.enum(["free", "committed", "pipeline", "utilization", "breakdown"]).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("findAvailabilityWindows"),
+      consultant: consultantRefSchema.optional(),
+      startDate: isoDateSchema,
+      endDate: isoDateSchema,
+      minimumFreeCapacity: z.number().int().min(0).max(100),
+      minimumWorkingDays: z.number().int().min(1).max(262),
+      includePipeline: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("findStaffingCandidatesRange"),
+      demand: demandRefSchema,
+      startDate: isoDateSchema,
+      endDate: isoDateSchema,
+      includePipeline: z.boolean().default(false),
+      minimumSkillMatches: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(100).default(20),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("findSuitableDemands"),
+      consultant: consultantRefSchema,
+      startDate: isoDateSchema,
+      endDate: isoDateSchema,
+      includePipeline: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(20),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("skillSupplyDemand"),
+      startDate: isoDateSchema,
+      endDate: isoDateSchema,
+      includePipeline: z.boolean().default(false),
+      skill: z.string().trim().min(1).max(100).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("productHelp"),
+      topic: z.enum([
+        "pipeline",
+        "confirmed",
+        "committedCapacity",
+        "workingCapacity",
+        "freeCapacity",
+        "overAllocation",
+        "candidateRanking",
+        "includePipeline",
+        "rfp",
+        "assistantScope",
+      ]),
     })
     .strict(),
   z
@@ -209,10 +326,40 @@ export const readActionSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+export const readActionSchema = readActionBaseSchema.superRefine((value, ctx) => {
+  if (
+    "startDate" in value &&
+    "endDate" in value &&
+    !isDateRangeOrdered(value.startDate, value.endDate)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "End date cannot be before start date",
+      path: ["endDate"],
+    });
+  }
+});
+
 export const capacityActionRequestSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("read"), action: readActionSchema }).strict(),
   z
-    .object({ mode: z.literal("preview"), action: proposedActionSchema, asOfDate: isoDateSchema })
+    .object({
+      mode: z.literal("preview"),
+      action: proposedActionSchema,
+      asOfDate: isoDateSchema,
+      expectedPreconditions: z
+        .array(
+          z
+            .object({
+              table: z.enum(["allocations", "availability_blocks", "consultants", "demands"]),
+              id: uuidSchema,
+              updatedAt: z.string().datetime(),
+            })
+            .strict(),
+        )
+        .max(100)
+        .optional(),
+    })
     .strict(),
   z
     .object({

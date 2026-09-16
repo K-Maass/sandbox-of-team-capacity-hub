@@ -3,9 +3,11 @@ import { createMiddleware } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { assistantRequestSchema } from "@/domain/capacity/assistant";
+import { CapacityActionFailure } from "@/domain/capacity/errors";
 import { requireSupabaseToken } from "@/integrations/supabase/auth-request-middleware.server";
+import { CAPACITY_ASSISTANT_BOUNDS } from "@/server/capacity/bounds.server";
 
-const MAX_REQUEST_BYTES = 32 * 1024;
+const MAX_REQUEST_BYTES = CAPACITY_ASSISTANT_BOUNDS.maxRequestBytes;
 
 function response(payload: unknown, status = 200): Response {
   return Response.json(payload, { status, headers: { "Cache-Control": "no-store" } });
@@ -152,6 +154,9 @@ export const Route = createFileRoute("/api/ai/capacity")({
               },
               502,
             );
+          }
+          if (error instanceof CapacityActionFailure) {
+            return response({ ok: false, error: error.detail }, statusFor(error.detail.code));
           }
           return response(
             {

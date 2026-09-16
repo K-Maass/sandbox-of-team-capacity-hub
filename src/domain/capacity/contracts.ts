@@ -171,6 +171,78 @@ export type GetCapacityAction = {
   consultant: ConsultantRef;
   onDate: ISODate;
   includePipeline?: boolean;
+  focus?: "free" | "committed" | "pipeline" | "utilization" | "breakdown" | "allocations";
+};
+
+export type GetCapacityRangeAction = {
+  kind: "getCapacityRange";
+  consultant: ConsultantRef;
+  startDate: ISODate;
+  endDate: ISODate;
+  includePipeline?: boolean;
+  focus?: "free" | "committed" | "pipeline" | "utilization" | "breakdown" | "allocations";
+};
+
+export type GetTeamOverviewRangeAction = {
+  kind: "getTeamOverviewRange";
+  startDate: ISODate;
+  endDate: ISODate;
+  includePipeline?: boolean;
+  role?: Role;
+  level?: Level;
+  focus?: "free" | "committed" | "pipeline" | "utilization" | "breakdown";
+};
+
+export type FindAvailabilityWindowsAction = {
+  kind: "findAvailabilityWindows";
+  consultant?: ConsultantRef;
+  startDate: ISODate;
+  endDate: ISODate;
+  minimumFreeCapacity: number;
+  minimumWorkingDays: number;
+  includePipeline?: boolean;
+};
+
+export type FindStaffingCandidatesRangeAction = {
+  kind: "findStaffingCandidatesRange";
+  demand: DemandRef;
+  startDate: ISODate;
+  endDate: ISODate;
+  includePipeline?: boolean;
+  minimumSkillMatches?: number;
+  limit?: number;
+};
+
+export type FindSuitableDemandsAction = {
+  kind: "findSuitableDemands";
+  consultant: ConsultantRef;
+  startDate: ISODate;
+  endDate: ISODate;
+  includePipeline?: boolean;
+  limit?: number;
+};
+
+export type SkillSupplyDemandAction = {
+  kind: "skillSupplyDemand";
+  startDate: ISODate;
+  endDate: ISODate;
+  includePipeline?: boolean;
+  skill?: string;
+};
+
+export type ProductHelpAction = {
+  kind: "productHelp";
+  topic:
+    | "pipeline"
+    | "confirmed"
+    | "committedCapacity"
+    | "workingCapacity"
+    | "freeCapacity"
+    | "overAllocation"
+    | "candidateRanking"
+    | "includePipeline"
+    | "rfp"
+    | "assistantScope";
 };
 
 export type FindStaffingCandidatesAction = {
@@ -189,13 +261,20 @@ export type GetTeamOverviewAction = {
 };
 
 export type ReadAction =
+  | FindAvailabilityWindowsAction
+  | FindStaffingCandidatesRangeAction
+  | FindSuitableDemandsAction
   | FindStaffingCandidatesAction
   | GetCapacityAction
+  | GetCapacityRangeAction
   | GetConsultantAction
   | GetDemandAction
+  | GetTeamOverviewRangeAction
   | GetTeamOverviewAction
   | ListConsultantsAction
-  | ListDemandsAction;
+  | ListDemandsAction
+  | SkillSupplyDemandAction
+  | ProductHelpAction;
 
 export type CreateDemandFields = {
   title: string;
@@ -211,6 +290,18 @@ export type CreateDemandFields = {
 };
 
 export type ProposedAction =
+  | {
+      kind: "createConsultant";
+      consultant: {
+        name: string;
+        surname: string;
+        email?: string | null;
+        level?: Level;
+        role?: Role;
+        skills?: string[];
+        workingCapacity?: number;
+      };
+    }
   | {
       kind: "updateConsultant";
       consultant: ConsultantRef;
@@ -244,6 +335,18 @@ export type ProposedAction =
   | { kind: "removeAvailabilityBlock"; block: AvailabilityBlockRef };
 
 export type ResolvedAction =
+  | {
+      kind: "createConsultant";
+      consultant: {
+        name: string;
+        surname: string;
+        email: string | null;
+        level: Level;
+        role: Role;
+        skills: string[];
+        workingCapacity: number;
+      };
+    }
   | {
       kind: "updateConsultant";
       consultantId: UUID;
@@ -315,6 +418,12 @@ export type RowVersion = {
   table: "allocations" | "availability_blocks" | "consultants" | "demands";
   id: UUID;
   updatedAt: string;
+  /**
+   * Server-only compilation guard. Ordinary preview fingerprints do not need
+   * this field, but relative actions carry it so an unchanged timestamp cannot
+   * hide an intervening state change.
+   */
+  stateFingerprint?: string;
 };
 
 export type ActionPreview = {
@@ -344,7 +453,12 @@ export type MutationResult = {
 
 export type CapacityActionRequest =
   | { mode: "read"; action: ReadAction }
-  | { mode: "preview"; action: ProposedAction; asOfDate: ISODate }
+  | {
+      mode: "preview";
+      action: ProposedAction;
+      asOfDate: ISODate;
+      expectedPreconditions?: RowVersion[];
+    }
   | {
       mode: "confirm";
       confirmed: true;

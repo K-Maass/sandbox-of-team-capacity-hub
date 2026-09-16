@@ -1,8 +1,7 @@
 const IBM_RESPONSES_URL = "https://api.servicesessentials.ibm.com/v1/responses";
 const IBM_SMOKE_MODEL = "gpt-5.6-luna";
 const EXPECTED_OUTPUT = "ICA_OK";
-const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_PROVIDER_BODY_BYTES = 512 * 1024;
+import { CAPACITY_ASSISTANT_BOUNDS } from "@/server/capacity/bounds.server";
 
 export type IbmAiSmokeErrorCode =
   "invalid_response" | "not_configured" | "provider_unavailable" | "timeout";
@@ -83,7 +82,7 @@ export async function runIbmAiSmoke(): Promise<typeof EXPECTED_OUTPUT> {
         max_output_tokens: 256,
         store: false,
       }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(CAPACITY_ASSISTANT_BOUNDS.providerTimeoutMs),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
@@ -116,7 +115,7 @@ export async function runIbmAiSmoke(): Promise<typeof EXPECTED_OUTPUT> {
 
 async function readLimitedText(response: Response): Promise<string> {
   const declaredLength = Number(response.headers.get("content-length") ?? "0");
-  if (declaredLength > MAX_PROVIDER_BODY_BYTES) {
+  if (declaredLength > CAPACITY_ASSISTANT_BOUNDS.maxProviderResponseBytes) {
     await response.body?.cancel();
     throw new IbmAiRequestError("invalid_response");
   }
@@ -130,7 +129,7 @@ async function readLimitedText(response: Response): Promise<string> {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_PROVIDER_BODY_BYTES) {
+      if (total > CAPACITY_ASSISTANT_BOUNDS.maxProviderResponseBytes) {
         await reader.cancel();
         throw new IbmAiRequestError("invalid_response");
       }
@@ -162,7 +161,7 @@ export async function runIbmFunctionCall(options: {
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort("timeout"),
-    options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+    options.timeoutMs ?? CAPACITY_ASSISTANT_BOUNDS.providerTimeoutMs,
   );
   const cancel = () => controller.abort("cancelled");
   const cleanup = () => {
@@ -234,7 +233,7 @@ export async function runIbmFunctionCall(options: {
       calls.length !== 1 ||
       typeof calls[0].name !== "string" ||
       typeof calls[0].arguments !== "string" ||
-      calls[0].arguments.length > 16_384
+      calls[0].arguments.length > CAPACITY_ASSISTANT_BOUNDS.maxProviderArgumentsChars
     ) {
       throw new IbmAiRequestError("invalid_response");
     }
