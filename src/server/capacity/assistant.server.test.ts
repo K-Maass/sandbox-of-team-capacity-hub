@@ -1594,6 +1594,251 @@ describe("Capacity assistant orchestration", () => {
     expect(repository.applyCount).toBe(0);
   });
 
+  /**
+   * Phase 2 remains authoritative for relative arithmetic, state fingerprints,
+   * and stale-preview behavior; these V2 tests characterize that seam.
+   */
+  test("V2 relative actions use fresh state and preserve Phase 2 validation", async () => {
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    repository.data.consultants[0].workingCapacity = 50;
+    repository.data.consultants[0].skills = ["AI"];
+    repository.data.allocations.push({
+      id: "20000000-0000-4000-8000-000000000001",
+      demandId: PHOENIX,
+      consultantId: ALEX_ONE,
+      capacity: 50,
+      createdAt: VERSION,
+      updatedAt: VERSION,
+    });
+    const v2 = (outcome: unknown) =>
+      handleCapacityAssistant(
+        { mode: "interpret", message: "synthetic relative request" },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          useV2Writes: true,
+          interpretV2: async () => semanticOutcomeSchema.parse(outcome),
+        },
+      );
+
+    const capacity = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "adjustConsultantCapacity",
+        consultant: { kind: "self" },
+        delta: 10,
+      },
+    });
+    expect(capacity).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "updateConsultant", patch: { workingCapacity: 60 } },
+      preview: { changes: [{ field: "workingCapacity", before: 50, after: 60 }] },
+    });
+
+    const allocation = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "adjustAllocation",
+        consultant: { kind: "self" },
+        demand: { kind: "name", name: "Phoenix" },
+        delta: 10,
+      },
+    });
+    expect(allocation).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "setAllocation", capacity: 60 },
+      preview: {
+        changes: [{ field: "capacity", before: 50, after: 60 }],
+        warnings: [{ code: "OVER_ALLOCATION" }],
+      },
+    });
+
+    const addSkill = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "changeConsultantSkill",
+        consultant: { kind: "self" },
+        skill: "Management",
+        operation: "add",
+      },
+    });
+    expect(addSkill).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "updateConsultant", patch: { skills: ["AI", "Management"] } },
+    });
+
+    repository.data.consultants[0].skills = ["AI", "Management"];
+    const removeSkill = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "changeConsultantSkill",
+        consultant: { kind: "self" },
+        skill: "Management",
+        operation: "remove",
+      },
+    });
+    expect(removeSkill).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "updateConsultant", patch: { skills: ["AI"] } },
+    });
+
+    const demand = await v2({
+      type: "relativeWrite",
+      asOf: { kind: "date", date: "2026-09-15" },
+      operation: {
+        kind: "adjustDemandCapacity",
+        demand: { kind: "name", name: "Phoenix" },
+        delta: 10,
+      },
+    });
+    expect(demand).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "updateDemand", patch: { requiredCapacity: 110 } },
+      preview: { changes: [{ field: "requiredCapacity", before: 100, after: 110 }] },
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 rebases a relative capacity delta before Phase 2 preview", async () => {
+    repository.data.consultants[1].workingCapacity = 50;
+    let loads = 0;
+    const rebasingRepository: CapacityRepository = {
+      async load() {
+        loads += 1;
+        // The external update lands after normalization's first snapshot and
+        // before its authoritative second snapshot. Keep updatedAt unchanged
+        // so this also exercises the relative state fingerprint.
+        if (loads === 3) repository.data.consultants[1].workingCapacity = 70;
+        return structuredClone(repository.data);
+      },
+      apply: (action, preview, actor) => repository.apply(action, preview, actor),
+    };
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase Alex by 10%" },
+      rebasingRepository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        useV2Writes: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "relativeWrite",
+            asOf: { kind: "date", date: "2026-09-15" },
+            operation: {
+              kind: "adjustConsultantCapacity",
+              consultant: { kind: "name", name: "Alex Smith" },
+              delta: 10,
+            },
+          }),
+      },
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      kind: "preview",
+      action: { kind: "updateConsultant", patch: { workingCapacity: 80 } },
+      preview: { changes: [{ field: "workingCapacity", before: 70, after: 80 }] },
+    });
+    expect(JSON.stringify(response)).not.toContain('"after":60');
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 relative preview rejects a same-timestamp race before Phase 2 preview", async () => {
+    repository.data.consultants[1].workingCapacity = 50;
+    let loads = 0;
+    const raceRepository: CapacityRepository = {
+      async load() {
+        loads += 1;
+        // This is immediately before executeCapacityAction's preview load.
+        // The unchanged timestamp makes the fingerprint check essential.
+        if (loads === 4) repository.data.consultants[1].workingCapacity = 70;
+        return structuredClone(repository.data);
+      },
+      apply: (action, preview, actor) => repository.apply(action, preview, actor),
+    };
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase Alex by 10%" },
+      raceRepository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        useV2Writes: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "relativeWrite",
+            asOf: { kind: "date", date: "2026-09-15" },
+            operation: {
+              kind: "adjustConsultantCapacity",
+              consultant: { kind: "name", name: "Alex Smith" },
+              delta: 10,
+            },
+          }),
+      },
+    );
+    expect(response).toMatchObject({ ok: false, error: { code: "STALE_PREVIEW" } });
+    expect(JSON.stringify(response)).not.toContain('"after":60');
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 relative stale confirmation still returns a Phase 2 replacement preview", async () => {
+    repository.data.consultants[1].workingCapacity = 50;
+    const preview = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase Alex by 10%" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        useV2Writes: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "relativeWrite",
+            asOf: { kind: "date", date: "2026-09-15" },
+            operation: {
+              kind: "adjustConsultantCapacity",
+              consultant: { kind: "name", name: "Alex Smith" },
+              delta: 10,
+            },
+          }),
+      },
+    );
+    expect(preview).toMatchObject({ ok: true, kind: "preview" });
+    if (!preview.ok || preview.kind !== "preview") throw new Error("Expected relative preview");
+
+    repository.data.consultants[1].workingCapacity = 70;
+    const stale = await handleCapacityAssistant(
+      {
+        mode: "confirm",
+        confirmed: true,
+        action: preview.action,
+        asOfDate: preview.preview.asOfDate,
+        previewId: preview.preview.previewId,
+      },
+      repository,
+      ACTOR,
+      { currentDate: "2026-09-15" },
+    );
+    expect(stale).toMatchObject({
+      ok: false,
+      error: { code: "STALE_PREVIEW" },
+      replacement: { preview: { changes: [{ before: 70, after: 60 }] } },
+    });
+    expect(repository.applyCount).toBe(0);
+  });
+
   test("V2 demand updates and availability writes preserve typed self references", async () => {
     repository.data.consultants[0].linkedToUser = true;
     repository.data.consultants[0].isCurrentUser = true;

@@ -405,4 +405,130 @@ describe("Luna V2 interpreter adapter", () => {
     });
     expect(data).toEqual(before);
   });
+
+  test("carries relative user language through V2 as deltas and as-of only", async () => {
+    const cases = [
+      {
+        message: "Increase my capacity by 10%.",
+        outcome: {
+          type: "relativeWrite",
+          operation: { kind: "adjustConsultantCapacity", consultant: { kind: "self" }, delta: 10 },
+          asOf: { kind: "date", date: TODAY },
+        },
+        expected: {
+          type: "relativeWrite",
+          operation: {
+            kind: "adjustConsultantCapacity",
+            consultant: { consultantId: KARIM },
+            delta: 10,
+          },
+          asOfDate: TODAY,
+        },
+      },
+      {
+        message: "Increase Karim's Phoenix allocation by 10%.",
+        outcome: {
+          type: "relativeWrite",
+          operation: {
+            kind: "adjustAllocation",
+            consultant: { kind: "name", name: "Karim" },
+            demand: { kind: "name", name: "Phoenix" },
+            delta: 10,
+          },
+          asOf: { kind: "date", date: TODAY },
+        },
+        expected: {
+          type: "relativeWrite",
+          operation: {
+            kind: "adjustAllocation",
+            consultant: { consultantId: KARIM },
+            demand: { demandId: PHOENIX },
+            delta: 10,
+          },
+          asOfDate: TODAY,
+        },
+      },
+      {
+        message: "Add Management to my skills.",
+        outcome: {
+          type: "relativeWrite",
+          operation: {
+            kind: "changeConsultantSkill",
+            consultant: { kind: "self" },
+            skill: "Management",
+            operation: "add",
+          },
+          asOf: { kind: "date", date: TODAY },
+        },
+        expected: {
+          type: "relativeWrite",
+          operation: {
+            kind: "changeConsultantSkill",
+            consultant: { consultantId: KARIM },
+            skill: "Management",
+            operation: "add",
+          },
+          asOfDate: TODAY,
+        },
+      },
+      {
+        message: "Remove Management from my skills.",
+        outcome: {
+          type: "relativeWrite",
+          operation: {
+            kind: "changeConsultantSkill",
+            consultant: { kind: "self" },
+            skill: "Management",
+            operation: "remove",
+          },
+          asOf: { kind: "date", date: TODAY },
+        },
+        expected: {
+          type: "relativeWrite",
+          operation: {
+            kind: "changeConsultantSkill",
+            consultant: { consultantId: KARIM },
+            skill: "Management",
+            operation: "remove",
+          },
+          asOfDate: TODAY,
+        },
+      },
+      {
+        message: "Increase Phoenix demand capacity by 10%.",
+        outcome: {
+          type: "relativeWrite",
+          operation: {
+            kind: "adjustDemandCapacity",
+            demand: { kind: "name", name: "Phoenix" },
+            delta: 10,
+          },
+          asOf: { kind: "date", date: TODAY },
+        },
+        expected: {
+          type: "relativeWrite",
+          operation: {
+            kind: "adjustDemandCapacity",
+            demand: { demandId: PHOENIX },
+            delta: 10,
+          },
+          asOfDate: TODAY,
+        },
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const compiled = await interpretAndCompileCapacityMessageV2(item.message, {
+        data: fixture(),
+        currentUserConsultantId: KARIM,
+        currentDate: TODAY,
+        runFunctionCall: async (request) => {
+          expect(request.input).toBe(item.message);
+          return call(item.outcome);
+        },
+      });
+      expect(compiled).toEqual(item.expected);
+      expect(JSON.stringify(compiled)).not.toContain("currentValue");
+    }
+  });
 });
