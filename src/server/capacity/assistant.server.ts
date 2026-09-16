@@ -59,7 +59,6 @@ type Interpreter = (
   currentDate: string,
   signal?: AbortSignal,
   context?: ConversationContext,
-  knownConsultantNames?: string[],
 ) => Promise<CapacityIntent>;
 
 type V2Interpreter = (
@@ -2177,13 +2176,7 @@ export async function handleCapacityAssistant(
 
   const interpret =
     options.interpret ?? (await import("./assistant-interpreter.server")).interpretCapacityMessage;
-  const intent = await interpret(
-    request.message,
-    currentDate,
-    options.signal,
-    validatedContext,
-    currentData.consultants.map((consultant) => fullName(consultant)),
-  );
+  const intent = await interpret(request.message, currentDate, options.signal, validatedContext);
   if (intent.type === "unsupported") {
     return finish({
       ok: true,

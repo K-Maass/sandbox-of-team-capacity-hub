@@ -613,7 +613,10 @@ describe("Capacity assistant orchestration", () => {
         { mode: "interpret", message },
         repository,
         ACTOR,
-        { currentDate: "2026-09-15" },
+        {
+          currentDate: "2026-09-15",
+          interpret: interpreter({ type: "unsupported", reason: "multiple_changes" }),
+        },
       );
       expect(response).toMatchObject({ ok: true, kind: "unsupported", reason: "multiple_changes" });
     }

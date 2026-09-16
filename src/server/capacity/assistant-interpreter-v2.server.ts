@@ -13,39 +13,9 @@ import {
   type SemanticCompilerOptions,
   type SemanticCompilerOutput,
 } from "./assistant-compiler.server";
-import { obviousUnsupportedReason } from "./assistant-interpreter.server";
 import { buildCapacityAssistantPrompt } from "./assistant-prompt.server";
 import { CAPACITY_ASSISTANT_TOOLS_V2, parseSemanticToolCall } from "./assistant-tools.server";
-
-const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
-const JWT_PATTERN = /\b[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/;
-const BEARER_TOKEN_PATTERN = /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}\b/i;
-const KNOWN_TOKEN_PATTERN = /\b(?:sk|gh[pousr]|xox[baprs])[-_][A-Za-z0-9_-]{10,}\b/i;
-const CREDENTIAL_LABEL_PATTERN =
-  "(?:api[_ -]?key|access[_ -]?token|service[-_ ]?role|authorization|password|secret|token|jwt)";
-const CREDENTIAL_ASSIGNMENT_PATTERN = new RegExp(
-  `\\b${CREDENTIAL_LABEL_PATTERN}\\s*[:=]\\s*\\S+`,
-  "i",
-);
-const CREDENTIAL_IS_PATTERN = new RegExp(
-  `\\b${CREDENTIAL_LABEL_PATTERN}\\s+is\\s+[A-Za-z0-9._~+/=-]{8,}\\b`,
-  "i",
-);
-
-/**
- * Content-only privacy guard for pasted credentials. It deliberately has no
- * product-language routing and is evaluated before prompt construction.
- */
-function containsCredentialLikeContent(message: string): boolean {
-  return (
-    UUID_PATTERN.test(message) ||
-    JWT_PATTERN.test(message) ||
-    BEARER_TOKEN_PATTERN.test(message) ||
-    KNOWN_TOKEN_PATTERN.test(message) ||
-    CREDENTIAL_ASSIGNMENT_PATTERN.test(message) ||
-    CREDENTIAL_IS_PATTERN.test(message)
-  );
-}
+import { preProviderSecurityReason } from "./pre-provider-security.server";
 
 export type CapacityV2FunctionCallRequest = {
   instructions: string;
@@ -154,10 +124,7 @@ export async function interpretCapacityMessageV2(
   signal?: AbortSignal,
   positionalRunner?: CapacityV2FunctionCallRunner,
 ): Promise<SemanticOutcome> {
-  if (
-    obviousUnsupportedReason(message) === "security_request" ||
-    containsCredentialLikeContent(message)
-  ) {
+  if (preProviderSecurityReason(message)) {
     return semanticOutcomeSchema.parse({ type: "unsupported", reason: "security_request" });
   }
 
