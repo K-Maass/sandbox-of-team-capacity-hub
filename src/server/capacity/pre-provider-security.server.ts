@@ -12,6 +12,19 @@ const CREDENTIAL_IS_PATTERN = new RegExp(
   `\\b${CREDENTIAL_LABEL_PATTERN}\\s+is\\s+[A-Za-z0-9._~+/=-]{8,}\\b`,
   "i",
 );
+const CAPACITY_TABLE_PATTERN = "(?:consultants|demands|allocations|availability_blocks)";
+const SQL_PAYLOAD_PATTERNS = [
+  /\bselect\s+1\b/i,
+  new RegExp(
+    `\\bselect\\s+(?:\\*|[A-Za-z_][A-Za-z0-9_]*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\s+from\\s+${CAPACITY_TABLE_PATTERN}\\b`,
+    "i",
+  ),
+  /\binsert\s+into\s+[A-Za-z_][A-Za-z0-9_]*\b/i,
+  /\bupdate\s+[A-Za-z_][A-Za-z0-9_]*\s+set\b/i,
+  /\bdelete\s+from\s+[A-Za-z_][A-Za-z0-9_]*\b/i,
+  /\b(?:alter|drop|truncate|create)\s+table\s+[A-Za-z_][A-Za-z0-9_]*\b/i,
+  /\bgrant\s+select\s+on\s+[A-Za-z_][A-Za-z0-9_]*\b/i,
+];
 
 /**
  * Returns the only reasons allowed to short-circuit before the IBM provider.
@@ -25,7 +38,7 @@ export function preProviderSecurityReason(message: string): "security_request" |
     );
   const sqlRequest =
     /\b(execute|run|write|generate|reveal)\b.{0,30}\bsql\b/.test(normalized) ||
-    /\b(drop|truncate)\s+table\b/.test(normalized);
+    SQL_PAYLOAD_PATTERNS.some((pattern) => pattern.test(message));
   const confirmationBypass = /\b(skip|bypass|without)\b.{0,30}\bconfirm/.test(normalized);
   const pastedCredential =
     UUID_PATTERN.test(message) ||

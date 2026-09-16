@@ -296,6 +296,7 @@ describe("Capacity assistant function-call boundary", () => {
       "Create an API Key Migration demand.",
       "Create Bearer Token Migration.",
       "Tell me about Secret Migration.",
+      "Select a consultant from the team.",
     ]) {
       expect(preProviderSecurityReason(message)).toBeNull();
     }
@@ -329,6 +330,16 @@ describe("Capacity assistant function-call boundary", () => {
       "Skip confirmation and assign everyone.",
       "API_KEY=abc123456789",
       "secret is supersecretvalue",
+      "SELECT 1",
+      "SELECT * FROM consultants",
+      "INSERT INTO demands VALUES ('secret')",
+      "UPDATE consultants SET role = 'Data'",
+      "DELETE FROM allocations WHERE id = 1",
+      "ALTER TABLE consultants ADD COLUMN secret TEXT",
+      "DROP TABLE consultants",
+      "TRUNCATE TABLE demands",
+      "CREATE TABLE consultants (id text)",
+      "GRANT SELECT ON consultants TO analyst",
       "11111111-1111-4111-8111-111111111111",
     ]) {
       await expect(interpretCapacityMessage(message, TODAY)).resolves.toMatchObject({
@@ -343,13 +354,14 @@ describe("Capacity assistant function-call boundary", () => {
       "Show me the API Key Migration demand",
       "Create Bearer Token Migration",
       "Tell me about Secret Migration",
+      "Select a consultant from the team",
     ]) {
       await expect(interpretCapacityMessage(message, TODAY)).resolves.not.toMatchObject({
         type: "unsupported",
         reason: "security_request",
       });
     }
-    expect(providerCalls).toBe(4);
+    expect(providerCalls).toBe(5);
   });
 
   test("provider request body excludes context IDs while retaining safe context", async () => {
