@@ -9,7 +9,8 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "eval:capacity": "bun run src/evaluation/runner.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

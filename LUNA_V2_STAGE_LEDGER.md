@@ -7,7 +7,7 @@ Started: 2026-09-16
 | Stage | Builder | Reviewers | Files changed | Tests / gate | Result | Commit |
 | --- | --- | --- | --- | --- | --- | --- |
 | 0 Baseline archaeology | Read-only Repository Archaeologist | Domain Semantics Reviewer; Security Boundary Reviewer | `LUNA_V2_BASELINE.md`; this ledger | 66 tests pass; build pass; 4 baseline TypeScript diagnostics; maps agree | PASS | pending |
-| 1 Evaluation corpus | pending | Conversational UX Reviewer; Domain Semantics Reviewer | pending | pending | pending | pending |
+| 1 Evaluation corpus | Stage 1 Eval/Test Engineer | Conversational UX Reviewer; Domain Semantics Reviewer | `src/evaluation/capacity-corpus.ts`; `src/evaluation/evaluator.ts`; `src/evaluation/evaluator.test.ts`; `src/evaluation/legacy-v1-adapter.ts`; `src/evaluation/state-aware-provider-adapter.ts`; `src/evaluation/runner.ts`; `package.json` | `bun test`: 76 pass; offline plumbing probe 2/2 and explicitly `NOT_RUN`; no-key runner exits 2 safely; `git diff --check` pass; 4 baseline TypeScript diagnostics unchanged | PASS after 5 repair iterations; both reviewers PASS with no findings | pending |
 | 2 Semantic contracts | pending | Domain Semantics Reviewer; Security Reviewer; Type/API Reviewer | pending | pending | pending | pending |
 | 3 Luna tools and prompt | pending | Model Behavior Reviewer; Security Reviewer; Architecture Reviewer | pending | pending | pending | pending |
 | 4 Semantic compiler | pending | Phase 2 Reviewer; Security Reviewer; Concurrency Reviewer | pending | pending | pending | pending |
