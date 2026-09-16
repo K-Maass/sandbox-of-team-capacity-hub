@@ -4,6 +4,7 @@ import { semanticOutcomeSchema, type SemanticOutcome } from "@/domain/capacity/a
 import type { CapacityDataSet } from "@/domain/capacity/contracts";
 import {
   runIbmFunctionCall,
+  IbmAiRequestError,
   type IbmFunctionCall,
   type IbmFunctionTool,
 } from "@/lib/ibm-ai.server";
@@ -81,11 +82,16 @@ export type CapacityV2InterpreterErrorCode =
 /** Errors at the V2 provider boundary are explicit and never trigger V1 fallback. */
 export class CapacityV2InterpreterError extends Error {
   readonly code: CapacityV2InterpreterErrorCode;
+  readonly providerCode?: import("@/lib/ibm-ai.server").IbmAiRequestErrorCode;
 
-  constructor(code: CapacityV2InterpreterErrorCode) {
+  constructor(
+    code: CapacityV2InterpreterErrorCode,
+    providerCode?: import("@/lib/ibm-ai.server").IbmAiRequestErrorCode,
+  ) {
     super(code);
     this.name = "CapacityV2InterpreterError";
     this.code = code;
+    this.providerCode = providerCode;
   }
 }
 
@@ -123,9 +129,9 @@ function isInterpreterOptions(value: unknown): value is CapacityV2InterpreterOpt
 }
 
 /**
- * Interpret one message through the Luna V2 semantic tool. This function is
- * intentionally unwired: it produces semantic meaning only and never reads,
- * resolves, previews, confirms, or mutates Capacity Hub data.
+ * Interpret one message through the Luna V2 semantic tool. It produces
+ * semantic meaning only and never reads, resolves, previews, confirms, or
+ * mutates Capacity Hub data.
  */
 export function interpretCapacityMessageV2(
   message: string,
@@ -181,7 +187,10 @@ export async function interpretCapacityMessageV2(
       signal: options.signal,
     });
   } catch (error) {
-    throw new CapacityV2InterpreterError("CAPACITY_V2_PROVIDER_ERROR");
+    throw new CapacityV2InterpreterError(
+      "CAPACITY_V2_PROVIDER_ERROR",
+      error instanceof IbmAiRequestError ? error.code : undefined,
+    );
   }
 
   if (!isFunctionCall(call)) {
@@ -203,7 +212,7 @@ export function compileCapacityMessageV2(
   return compileSemanticOutcome(outcome, options);
 }
 
-/** Unwired convenience adapter: V2 interpretation followed by deterministic compilation. */
+/** Convenience adapter: V2 interpretation followed by deterministic compilation. */
 export async function interpretAndCompileCapacityMessageV2(
   message: string,
   options: CapacityV2InterpreterOptions & {

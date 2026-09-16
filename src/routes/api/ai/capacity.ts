@@ -6,6 +6,7 @@ import { assistantRequestSchema } from "@/domain/capacity/assistant";
 import { CapacityActionFailure } from "@/domain/capacity/errors";
 import { requireSupabaseToken } from "@/integrations/supabase/auth-request-middleware.server";
 import { CAPACITY_ASSISTANT_BOUNDS } from "@/server/capacity/bounds.server";
+import { CapacityV2InterpreterError } from "@/server/capacity/assistant-interpreter-v2.server";
 
 const MAX_REQUEST_BYTES = CAPACITY_ASSISTANT_BOUNDS.maxRequestBytes;
 
@@ -120,10 +121,31 @@ export const Route = createFileRoute("/api/ai/capacity")({
           const repository = new SupabaseCapacityRepository(request, context.userId);
           const result = await handleCapacityAssistant(parsed.data, repository, context.userId, {
             signal: request.signal,
+            useV2Reads: parsed.data.mode === "interpret",
           });
           return response(result, result.ok ? 200 : statusFor(result.error.code));
         } catch (error) {
           const { IbmAiRequestError } = await import("@/lib/ibm-ai.server");
+          if (error instanceof CapacityV2InterpreterError) {
+            const mapped =
+              error.providerCode === "cancelled"
+                ? (["REQUEST_CANCELLED", "Request was cancelled."] as const)
+                : error.providerCode === "not_configured"
+                  ? (["AI_NOT_CONFIGURED", "The local AI runtime is not configured."] as const)
+                  : error.providerCode === "timeout"
+                    ? (["AI_TIMEOUT", "The AI provider timed out."] as const)
+                    : error.providerCode === "provider_unavailable"
+                      ? (["AI_UNAVAILABLE", "The AI provider is unavailable."] as const)
+                      : ([
+                          "AI_INVALID_RESPONSE",
+                          "The AI response could not be validated.",
+                        ] as const);
+            const [code, message] = mapped;
+            return response(
+              { ok: false, error: { code, message, retryable: code !== "AI_NOT_CONFIGURED" } },
+              statusFor(code),
+            );
+          }
           if (error instanceof IbmAiRequestError) {
             const mapped = {
               cancelled: ["REQUEST_CANCELLED", "Request was cancelled."],

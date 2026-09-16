@@ -32,11 +32,21 @@ import { resolveConsultant, resolveDemand } from "@/domain/capacity/resolution";
 import { normalizeSkills } from "@/domain/capacity/form-validation";
 import { executeCapacityAction, type CapacityActionResponse } from "./actions.server";
 import {
+  compileSemanticOutcome,
+  compileSemanticReadForClarification,
+  type SemanticCompilerOptions,
+  type SemanticCompilerOutput,
+} from "./assistant-compiler.server";
+import {
   clearPendingClarification,
   reconcilePendingClarification,
   revalidatePendingClarification,
   retainPendingClarification,
 } from "./assistant-clarification.server";
+import {
+  interpretCapacityMessageV2,
+  type CapacityV2InterpreterOptions,
+} from "./assistant-interpreter-v2.server";
 import type { CapacityRepository } from "./repository";
 import { CAPACITY_ASSISTANT_BOUNDS } from "./bounds.server";
 
@@ -47,6 +57,21 @@ type Interpreter = (
   context?: ConversationContext,
   knownConsultantNames?: string[],
 ) => Promise<CapacityIntent>;
+
+type V2Interpreter = (
+  message: string,
+  currentDate: string,
+  options?: CapacityV2InterpreterOptions,
+) => Promise<SemanticOutcome>;
+type V2Compiler = (
+  outcome: SemanticOutcome,
+  options: SemanticCompilerOptions,
+) => SemanticCompilerOutput;
+
+const V2_READ_CUTOVER_UNSUPPORTED_MESSAGE =
+  "The Luna V2 read cutover supports read requests only. Writes, compound requests, help, and clarification completion remain on later stages; V1 fallback is not available.";
+const V2_READ_CUTOVER_FAILURE_MESSAGE =
+  "The Luna V2 read cutover could not compile this read safely. V1 fallback is not available.";
 
 type ConsultantReadRow = { consultant: ConsultantDto; capacity: CapacitySnapshot | null };
 type DemandReadRow = { demand: DemandDto; staffing: StaffingSnapshot };
@@ -1760,6 +1785,162 @@ async function confirm(
   return errorResponse(result.error.code, result.error.message, currentDate);
 }
 
+function currentUserConsultantIdForV2(data: CapacityDataSet): string {
+  const matches = data.consultants.filter(
+    (consultant) => consultant.isCurrentUser && consultant.linkedToUser,
+  );
+  // An empty selector keeps non-self reads available while causing the
+  // compiler's self resolver to reject an unlinked or inconsistent profile.
+  return matches.length === 1 ? matches[0].id : "";
+}
+
+async function handleV2ReadCutover(
+  request: Extract<AssistantRequest, { mode: "interpret" }>,
+  repository: CapacityRepository,
+  actorUserId: string,
+  currentDate: string,
+  currentData: CapacityDataSet,
+  validatedContext: ConversationContext | undefined,
+  pendingClarification: PendingClarification | null,
+  finish: (response: AssistantResponse) => AssistantResponse,
+  options: {
+    signal?: AbortSignal;
+    interpretV2?: V2Interpreter;
+    compileV2?: V2Compiler;
+  },
+): Promise<AssistantResponse> {
+  const interpretV2 = options.interpretV2 ?? interpretCapacityMessageV2;
+  const outcome = await interpretV2(request.message, currentDate, {
+    context: validatedContext,
+    pendingClarification: pendingClarification ?? undefined,
+    signal: options.signal,
+  });
+
+  const reconciled = reconcilePendingClarification(pendingClarification, outcome);
+  if (!reconciled.ok) {
+    return withPendingClarification(
+      errorResponse(
+        reconciled.error,
+        pendingClarificationErrorMessage(reconciled.error),
+        currentDate,
+      ),
+      null,
+    );
+  }
+  if (outcome.type === "clarification" && reconciled.pending) {
+    return {
+      ok: true,
+      kind: "semantic_clarification",
+      message: outcome.question,
+      pendingClarification: reconciled.pending,
+      currentDate,
+      context: validatedContext,
+    };
+  }
+  if (outcome.type !== "read") {
+    return finish(
+      errorResponse(
+        "V2_READ_CUTOVER_UNSUPPORTED",
+        V2_READ_CUTOVER_UNSUPPORTED_MESSAGE,
+        currentDate,
+        false,
+        validatedContext,
+      ),
+    );
+  }
+
+  const compilerOptions: SemanticCompilerOptions = {
+    data: currentData,
+    currentUserConsultantId: currentUserConsultantIdForV2(currentData),
+    currentDate,
+    context: validatedContext,
+  };
+  const compileV2 = options.compileV2 ?? compileSemanticOutcome;
+  let intent: ActionableCapacityIntent;
+  try {
+    const compiled = compileV2(outcome, compilerOptions);
+    if (compiled.type !== "read") {
+      return finish(
+        errorResponse(
+          "V2_READ_CUTOVER_UNSUPPORTED",
+          V2_READ_CUTOVER_UNSUPPORTED_MESSAGE,
+          currentDate,
+          false,
+          validatedContext,
+        ),
+      );
+    }
+    intent = compiled;
+  } catch (error) {
+    if (error instanceof CapacityActionFailure && error.detail.code === "AMBIGUOUS_REFERENCE") {
+      try {
+        const clarificationIntent = compileSemanticReadForClarification(outcome, compilerOptions);
+        const clarification = clarificationFromFailure(
+          error,
+          clarificationIntent,
+          [],
+          currentDate,
+          validatedContext,
+        );
+        if (clarification) return finish(clarification);
+      } catch {
+        // Fall through to the safe cutover error if the clarification shape
+        // cannot be constructed from the same authoritative snapshot.
+      }
+    }
+    return finish(
+      errorResponse(
+        "V2_READ_CUTOVER_COMPILE_FAILED",
+        V2_READ_CUTOVER_FAILURE_MESSAGE,
+        currentDate,
+        true,
+        validatedContext,
+      ),
+    );
+  }
+
+  let preparedIntent: PreparedIntent;
+  try {
+    preparedIntent = await normalizeIntent(intent, repository, actorUserId);
+  } catch (error) {
+    if (error instanceof CapacityActionFailure) {
+      const clarification = clarificationFromFailure(
+        error,
+        intent,
+        [],
+        currentDate,
+        validatedContext,
+      );
+      if (clarification) return finish(clarification);
+    }
+    return finish(
+      errorResponse(
+        "V2_READ_CUTOVER_COMPILE_FAILED",
+        V2_READ_CUTOVER_FAILURE_MESSAGE,
+        currentDate,
+        true,
+        validatedContext,
+      ),
+    );
+  }
+  const result = await executeCapacityAction(
+    actionRequest(preparedIntent.intent, preparedIntent.expectedPreconditions),
+    repository,
+    actorUserId,
+  );
+  return finish(
+    await presentActionable(
+      preparedIntent.intent,
+      intent,
+      [],
+      result,
+      repository,
+      currentDate,
+      validatedContext,
+    ),
+  );
+}
+
 export async function handleCapacityAssistant(
   request: AssistantRequest,
   repository: CapacityRepository,
@@ -1769,6 +1950,9 @@ export async function handleCapacityAssistant(
     currentDate?: string;
     interpret?: Interpreter;
     semanticOutcome?: SemanticOutcome;
+    useV2Reads?: boolean;
+    interpretV2?: V2Interpreter;
+    compileV2?: V2Compiler;
   } = {},
 ): Promise<AssistantResponse> {
   const currentDate = options.currentDate ?? todayIsoDate();
@@ -1805,6 +1989,19 @@ export async function handleCapacityAssistant(
       );
     }
     throw error;
+  }
+  if (options.useV2Reads && request.mode === "interpret") {
+    return handleV2ReadCutover(
+      request,
+      repository,
+      actorUserId,
+      currentDate,
+      currentData,
+      validatedContext,
+      pendingClarification,
+      finish,
+      options,
+    );
   }
   if (options.semanticOutcome) {
     const reconciled = reconcilePendingClarification(pendingClarification, options.semanticOutcome);

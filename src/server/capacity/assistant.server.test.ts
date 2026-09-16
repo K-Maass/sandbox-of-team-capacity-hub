@@ -2,15 +2,23 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import type { ActionPreview, CapacityDataSet, ResolvedAction } from "@/domain/capacity/contracts";
-import { assistantRequestSchema, type CapacityIntent } from "@/domain/capacity/assistant";
+import {
+  assistantRequestSchema,
+  type CapacityIntent,
+  type ConversationContext,
+} from "@/domain/capacity/assistant";
 import { semanticOutcomeSchema } from "@/domain/capacity/assistant-semantic";
+import { compileSemanticOutcome } from "./assistant-compiler.server";
+import { CapacityV2InterpreterError } from "./assistant-interpreter-v2.server";
 import { handleCapacityAssistant } from "./assistant.server";
 import type { CapacityRepository, RepositoryMutation } from "./repository";
 
 const ALEX_ONE = "00000000-0000-4000-8000-000000000001";
 const ALEX_TWO = "00000000-0000-4000-8000-000000000002";
 const ANNA = "00000000-0000-4000-8000-000000000003";
+const MAYA = "00000000-0000-4000-8000-000000000004";
 const PHOENIX = "10000000-0000-4000-8000-000000000001";
+const PHOENIX_TWO = "10000000-0000-4000-8000-000000000002";
 const ACTOR = "30000000-0000-4000-8000-000000000001";
 const VERSION = "2026-09-15T10:00:00.000Z";
 
@@ -750,5 +758,401 @@ describe("Capacity assistant orchestration", () => {
       context: {},
       pendingClarification: null,
     });
+  });
+
+  test("V2 read cutover compiles self reads through the existing read presentation", async () => {
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    let legacyCalls = 0;
+    let compilerCurrentUserId: string | undefined;
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "How much am I taken?" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        interpret: async () => {
+          legacyCalls += 1;
+          throw new Error("V1 must not be called");
+        },
+        interpretV2: async (_message, _date, interpreterOptions) => {
+          expect(interpreterOptions).not.toHaveProperty("currentUserConsultantId");
+          return semanticOutcomeSchema.parse({
+            type: "read",
+            action: {
+              kind: "getCapacity",
+              consultant: { kind: "self" },
+              onDate: { kind: "date", date: "2026-09-15" },
+              includePipeline: false,
+              focus: "committed",
+            },
+          });
+        },
+        compileV2: (outcome, compilerOptions) => {
+          compilerCurrentUserId = compilerOptions.currentUserConsultantId;
+          return compileSemanticOutcome(outcome, compilerOptions);
+        },
+      },
+    );
+    expect(response).toMatchObject({ ok: true, kind: "read", details: { kind: "capacity" } });
+    expect(compilerCurrentUserId).toBe(ALEX_ONE);
+    expect(legacyCalls).toBe(0);
+    expect(repository.applyCount).toBe(0);
+
+    const legacy = await handleCapacityAssistant(
+      { mode: "interpret", message: "legacy equivalent" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        interpret: async () => ({
+          type: "read",
+          action: {
+            kind: "getCapacity",
+            consultant: { name: "me" },
+            onDate: "2026-09-15",
+            includePipeline: false,
+            focus: "committed",
+          },
+          presentation: "default",
+        }),
+      },
+    );
+    if (response.ok && response.kind === "read" && legacy.ok && legacy.kind === "read") {
+      expect({
+        message: response.message,
+        details: response.details,
+        context: response.context,
+      }).toEqual({ message: legacy.message, details: legacy.details, context: legacy.context });
+    }
+  });
+
+  test("V2 preserves context, range, focus, weekend, and open-ended Phase 2 semantics", async () => {
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    repository.data.consultants.push({
+      ...repository.data.consultants[0],
+      id: MAYA,
+      name: "Maya",
+      surname: "Singh",
+      email: "maya@example.com",
+      linkedToUser: false,
+      isCurrentUser: false,
+    });
+    repository.data.demands.push({
+      ...repository.data.demands[0],
+      id: "10000000-0000-4000-8000-000000000002",
+      title: "Open-ended",
+      startDate: null,
+      endDate: null,
+    });
+    const outcomes = new Map([
+      [
+        "taken",
+        semanticOutcomeSchema.parse({
+          type: "read",
+          action: {
+            kind: "getCapacity",
+            consultant: { kind: "self" },
+            onDate: { kind: "date", date: "2026-09-15" },
+            includePipeline: false,
+            focus: "committed",
+          },
+        }),
+      ],
+      [
+        "pipeline",
+        semanticOutcomeSchema.parse({
+          type: "read",
+          action: {
+            kind: "getCapacity",
+            consultant: { kind: "current_context" },
+            onDate: { kind: "current_context" },
+            includePipeline: true,
+            focus: "pipeline",
+          },
+        }),
+      ],
+      [
+        "why",
+        semanticOutcomeSchema.parse({
+          type: "read",
+          action: {
+            kind: "getCapacity",
+            consultant: { kind: "current_context" },
+            onDate: { kind: "current_context" },
+            includePipeline: true,
+            focus: "breakdown",
+          },
+        }),
+      ],
+      [
+        "projects",
+        semanticOutcomeSchema.parse({
+          type: "read",
+          action: { kind: "getConsultant", consultant: { kind: "self" }, includePipeline: false },
+        }),
+      ],
+      [
+        "Maya",
+        semanticOutcomeSchema.parse({
+          type: "read",
+          action: { kind: "getConsultant", consultant: { kind: "name", name: "Maya" } },
+        }),
+      ],
+    ]);
+    const ask = (message: string, context?: ConversationContext) =>
+      handleCapacityAssistant(
+        { mode: "interpret", message, ...(context ? { context } : {}) },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          interpretV2: async (input) => outcomes.get(input)!,
+        },
+      );
+
+    const taken = await ask("taken");
+    expect(taken).toMatchObject({
+      ok: true,
+      context: {
+        scope: "consultant",
+        lastConsultant: { id: ALEX_ONE },
+        lastRange: { startDate: "2026-09-15", endDate: "2026-09-15" },
+        lastFocus: "committed",
+      },
+    });
+    const pipeline = await ask("pipeline", taken.ok ? taken.context : undefined);
+    expect(pipeline).toMatchObject({
+      ok: true,
+      context: {
+        scope: "consultant",
+        lastConsultant: { id: ALEX_ONE },
+        lastRange: { startDate: "2026-09-15", endDate: "2026-09-15" },
+        lastFocus: "pipeline",
+        includePipeline: true,
+      },
+    });
+    const why = await ask("why", pipeline.ok ? pipeline.context : undefined);
+    expect(why).toMatchObject({
+      ok: true,
+      context: { lastFocus: "breakdown", explainFocus: "pipeline" },
+    });
+    const projects = await ask("projects", why.ok ? why.context : undefined);
+    expect(projects).toMatchObject({ ok: true, context: { lastFocus: "allocations" } });
+    const maya = await ask("Maya", projects.ok ? projects.context : undefined);
+    expect(maya).toMatchObject({ ok: true, context: { lastConsultant: { id: MAYA } } });
+
+    const weekend = await handleCapacityAssistant(
+      { mode: "interpret", message: "weekend" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "read",
+            action: {
+              kind: "getTeamOverviewRange",
+              range: { kind: "range", startDate: "2026-09-19", endDate: "2026-09-20" },
+              includePipeline: false,
+              focus: "free",
+            },
+          }),
+      },
+    );
+    expect(weekend).toMatchObject({ ok: true, details: { kind: "rangeOverview", days: [] } });
+
+    const openEnded = await handleCapacityAssistant(
+      { mode: "interpret", message: "open-ended" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "read",
+            action: {
+              kind: "listDemands",
+              activeOn: { kind: "date", date: "2026-09-15" },
+              includeClosed: true,
+            },
+          }),
+      },
+    );
+    expect(openEnded).toMatchObject({ ok: true, details: { kind: "demands" } });
+    if (openEnded.ok && openEnded.kind === "read" && openEnded.details.kind === "demands")
+      expect(openEnded.details.rows.some((row) => row.title === "Open-ended")).toBe(true);
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 duplicate names use authoritative candidate clarification", async () => {
+    let legacyCalls = 0;
+    const response = await handleCapacityAssistant(
+      { mode: "interpret", message: "Mysterious Alex" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        interpret: async () => {
+          legacyCalls += 1;
+          throw new Error("V1 must not be called");
+        },
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "read",
+            action: {
+              kind: "getConsultant",
+              consultant: { kind: "name", name: "Alex" },
+            },
+          }),
+      },
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      field: "consultant",
+      candidates: [{ id: ALEX_ONE }, { id: ALEX_TWO }],
+      intent: { type: "read", action: { kind: "getConsultant", consultant: { name: "Alex" } } },
+    });
+    expect(legacyCalls).toBe(0);
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 duplicate demand reads use authoritative candidate clarification", async () => {
+    repository.data.demands.push({
+      ...repository.data.demands[0],
+      id: PHOENIX_TWO,
+      client: "Other Client",
+    });
+    let legacyCalls = 0;
+    const outcomes = [
+      {
+        kind: "getDemand" as const,
+        demand: { kind: "name" as const, name: "Phoenix" },
+        onDate: { kind: "date" as const, date: "2026-09-15" },
+      },
+      {
+        kind: "findStaffingCandidatesRange" as const,
+        demand: { kind: "name" as const, name: "Phoenix" },
+        range: { kind: "range" as const, startDate: "2026-09-15", endDate: "2026-09-19" },
+        includePipeline: false,
+        minimumSkillMatches: 0,
+        limit: 20,
+      },
+    ];
+
+    for (const action of outcomes) {
+      const response = await handleCapacityAssistant(
+        { mode: "interpret", message: "Which Phoenix?" },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          interpret: async () => {
+            legacyCalls += 1;
+            throw new Error("V1 must not be called");
+          },
+          interpretV2: async () => semanticOutcomeSchema.parse({ type: "read", action }),
+        },
+      );
+      expect(response).toMatchObject({
+        ok: true,
+        kind: "clarification",
+        field: "demand",
+        candidates: [{ id: PHOENIX }, { id: PHOENIX_TWO }],
+      });
+    }
+    expect(legacyCalls).toBe(0);
+    expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 failures, writes, compound outcomes, and compile failures never call V1", async () => {
+    let legacyCalls = 0;
+    const base = {
+      currentDate: "2026-09-15",
+      useV2Reads: true,
+      interpret: async () => {
+        legacyCalls += 1;
+        throw new Error("V1 must not be called");
+      },
+    };
+    await expect(
+      handleCapacityAssistant({ mode: "interpret", message: "provider fails" }, repository, ACTOR, {
+        ...base,
+        interpretV2: async () => {
+          throw new CapacityV2InterpreterError(
+            "CAPACITY_V2_PROVIDER_ERROR",
+            "provider_unavailable",
+          );
+        },
+      }),
+    ).rejects.toMatchObject({ code: "CAPACITY_V2_PROVIDER_ERROR" });
+
+    const clarification = await handleCapacityAssistant(
+      { mode: "interpret", message: "need clarification" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "clarification",
+            intentFamily: "create_consultant",
+            knownFacts: { name: "Anna" },
+            missing: ["surname", "level", "role"],
+            question: "What surname, level, and role should Anna have?",
+            reason: "The remaining profile fields are required.",
+          }),
+      },
+    );
+    expect(clarification).toMatchObject({
+      ok: true,
+      kind: "semantic_clarification",
+      pendingClarification: { intentFamily: "create_consultant" },
+    });
+
+    for (const outcome of [
+      { type: "write", action: { kind: "createDemand", demand: { title: "Nope" } } },
+      { type: "multiple_changes", changeCount: 2, reason: "Two changes." },
+      { type: "conversation_or_help", topic: "howToUse" },
+    ]) {
+      const response = await handleCapacityAssistant(
+        { mode: "interpret", message: "not a read" },
+        repository,
+        ACTOR,
+        { ...base, interpretV2: async () => semanticOutcomeSchema.parse(outcome) },
+      );
+      expect(response).toMatchObject({ ok: false, error: { code: "V2_READ_CUTOVER_UNSUPPORTED" } });
+    }
+
+    const compileFailure = await handleCapacityAssistant(
+      { mode: "interpret", message: "broken read" },
+      repository,
+      ACTOR,
+      {
+        ...base,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "read",
+            action: { kind: "getTeamOverview", onDate: { kind: "date", date: "2026-09-15" } },
+          }),
+        compileV2: () => {
+          throw new Error("compiler secret");
+        },
+      },
+    );
+    expect(compileFailure).toMatchObject({
+      ok: false,
+      error: { code: "V2_READ_CUTOVER_COMPILE_FAILED" },
+    });
+    expect(legacyCalls).toBe(0);
+    expect(repository.applyCount).toBe(0);
   });
 });

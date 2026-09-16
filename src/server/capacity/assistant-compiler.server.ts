@@ -202,7 +202,8 @@ function consultantRef(
   ref: SemanticConsultantRef,
   options: ValidatedOptions,
   field: string,
-): Extract<ConsultantRef, { consultantId: string }> {
+  preserveAmbiguousName = false,
+): ConsultantRef {
   if (ref.kind === "self") return { consultantId: currentConsultantId(options) };
   if (ref.kind === "current_context") {
     if (!options.context?.lastConsultant) {
@@ -228,7 +229,19 @@ function consultantRef(
     }
     return { consultantId: consultant.id };
   }
-  const consultant = resolveConsultant({ name: ref.name }, options.data.consultants, { field });
+  let consultant;
+  try {
+    consultant = resolveConsultant({ name: ref.name }, options.data.consultants, { field });
+  } catch (error) {
+    if (
+      preserveAmbiguousName &&
+      error instanceof CapacityActionFailure &&
+      error.detail.code === "AMBIGUOUS_REFERENCE"
+    ) {
+      return { name: ref.name };
+    }
+    throw error;
+  }
   return { consultantId: consultant.id };
 }
 
@@ -236,7 +249,8 @@ function demandRef(
   ref: SemanticDemandRef,
   options: ValidatedOptions,
   field: string,
-): Extract<DemandRef, { demandId: string }> {
+  preserveAmbiguousName = false,
+): DemandRef {
   if (ref.kind === "current_context") {
     if (!options.context?.lastDemand) {
       throw new CapacityActionFailure(
@@ -255,7 +269,19 @@ function demandRef(
     }
     return { demandId: demand.id };
   }
-  const demand = resolveDemand({ title: ref.name }, options.data.demands, { field });
+  let demand;
+  try {
+    demand = resolveDemand({ title: ref.name }, options.data.demands, { field });
+  } catch (error) {
+    if (
+      preserveAmbiguousName &&
+      error instanceof CapacityActionFailure &&
+      error.detail.code === "AMBIGUOUS_REFERENCE"
+    ) {
+      return { title: ref.name };
+    }
+    throw error;
+  }
   return { demandId: demand.id };
 }
 
@@ -367,6 +393,7 @@ function compileRead(
   action: SemanticReadAction,
   options: ValidatedOptions,
   presentation: CompilerPresentation,
+  preserveAmbiguousNames = false,
 ): ActionableCapacityIntent {
   let read: ReadAction;
   switch (action.kind) {
@@ -387,7 +414,7 @@ function compileRead(
     case "getConsultant":
       read = readActionSchema.parse({
         kind: action.kind,
-        consultant: consultantRef(action.consultant, options, "consultant"),
+        consultant: consultantRef(action.consultant, options, "consultant", preserveAmbiguousNames),
         onDate: action.onDate ? resolvePoint(action.onDate, options, "action.onDate") : undefined,
         includePipeline: action.includePipeline,
       });
@@ -397,7 +424,9 @@ function compileRead(
         kind: action.kind,
         statuses: action.statuses,
         types: action.types,
-        owner: action.owner ? consultantRef(action.owner, options, "owner") : undefined,
+        owner: action.owner
+          ? consultantRef(action.owner, options, "owner", preserveAmbiguousNames)
+          : undefined,
         activeOn: action.activeOn
           ? resolvePoint(action.activeOn, options, "action.activeOn")
           : undefined,
@@ -408,14 +437,14 @@ function compileRead(
     case "getDemand":
       read = readActionSchema.parse({
         kind: action.kind,
-        demand: demandRef(action.demand, options, "demand"),
+        demand: demandRef(action.demand, options, "demand", preserveAmbiguousNames),
         onDate: action.onDate ? resolvePoint(action.onDate, options, "action.onDate") : undefined,
       });
       return readIntent(read, action.focus === "staffing_gap" ? "staffing_gap" : presentation);
     case "getCapacity":
       read = readActionSchema.parse({
         kind: action.kind,
-        consultant: consultantRef(action.consultant, options, "consultant"),
+        consultant: consultantRef(action.consultant, options, "consultant", preserveAmbiguousNames),
         onDate: resolvePoint(action.onDate, options, "action.onDate"),
         includePipeline: action.includePipeline,
         focus: action.focus,
@@ -425,7 +454,7 @@ function compileRead(
       const range = rangeActionDates(action.range, options, "action.range");
       read = readActionSchema.parse({
         kind: action.kind,
-        consultant: consultantRef(action.consultant, options, "consultant"),
+        consultant: consultantRef(action.consultant, options, "consultant", preserveAmbiguousNames),
         ...range,
         includePipeline: action.includePipeline,
         focus: action.focus,
@@ -449,7 +478,7 @@ function compileRead(
       read = readActionSchema.parse({
         kind: action.kind,
         consultant: action.consultant
-          ? consultantRef(action.consultant, options, "consultant")
+          ? consultantRef(action.consultant, options, "consultant", preserveAmbiguousNames)
           : undefined,
         ...range,
         minimumFreeCapacity: action.minimumFreeCapacity,
@@ -462,7 +491,7 @@ function compileRead(
       const range = rangeActionDates(action.range, options, "action.range");
       read = readActionSchema.parse({
         kind: action.kind,
-        demand: demandRef(action.demand, options, "demand"),
+        demand: demandRef(action.demand, options, "demand", preserveAmbiguousNames),
         ...range,
         includePipeline: action.includePipeline,
         minimumSkillMatches: action.minimumSkillMatches,
@@ -474,7 +503,7 @@ function compileRead(
       const range = rangeActionDates(action.range, options, "action.range");
       read = readActionSchema.parse({
         kind: action.kind,
-        consultant: consultantRef(action.consultant, options, "consultant"),
+        consultant: consultantRef(action.consultant, options, "consultant", preserveAmbiguousNames),
         ...range,
         includePipeline: action.includePipeline,
         limit: action.limit,
@@ -497,7 +526,7 @@ function compileRead(
     case "findStaffingCandidates":
       read = readActionSchema.parse({
         kind: action.kind,
-        demand: demandRef(action.demand, options, "demand"),
+        demand: demandRef(action.demand, options, "demand", preserveAmbiguousNames),
         onDate: resolvePoint(action.onDate, options, "action.onDate"),
         includePipeline: action.includePipeline,
         minimumSkillMatches: action.minimumSkillMatches,
@@ -649,6 +678,15 @@ function compileWrite(
       );
     case "removeAvailabilityBlock": {
       const consultant = consultantRef(action.block.consultant, options, "block.consultant");
+      if (!("consultantId" in consultant)) {
+        throw new CapacityActionFailure(
+          "VALIDATION_ERROR",
+          "Consultant reference was not resolved",
+          {
+            field: "block.consultant",
+          },
+        );
+      }
       const startDate = resolvePoint(action.block.startDate, options, "block.startDate");
       const endDate = resolvePoint(action.block.endDate, options, "block.endDate");
       const block = options.data.availabilityBlocks.find(
@@ -757,4 +795,25 @@ export function tryCompileSemanticOutcome(
     }
     throw error;
   }
+}
+
+/**
+ * Build the normal actionable read shape while retaining an ambiguous model
+ * reference as a name. The handler uses this only to enter the existing
+ * authoritative candidate-clarification flow; it is never executed before
+ * the candidate is selected.
+ */
+export function compileSemanticReadForClarification(
+  input: SemanticOutcome,
+  options: SemanticCompilerOptions,
+): ActionableCapacityIntent {
+  const outcome = semanticOutcomeSchema.parse(input);
+  if (outcome.type !== "read") {
+    throw new CapacityActionFailure(
+      "VALIDATION_ERROR",
+      "Only semantic reads can enter read clarification",
+    );
+  }
+  const validated = validateOptions(options);
+  return compileRead(outcome.action, validated, outcome.presentation, true);
 }
