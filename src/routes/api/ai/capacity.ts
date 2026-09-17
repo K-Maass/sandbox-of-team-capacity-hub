@@ -19,8 +19,18 @@ function isLoopbackRequest(request: Request): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
-const localOnly = createMiddleware().server(async ({ request, next }) => {
-  if (process.env.NODE_ENV === "production" || !isLoopbackRequest(request)) {
+export function isHostedProductionRequest(request: Request): boolean {
+  return (
+    process.env["VERCEL"] === "1" &&
+    process.env["VERCEL_ENV"] === "production" &&
+    process.env["CAPACITY_AI_HOSTED"] === "true" &&
+    !isLoopbackRequest(request)
+  );
+}
+
+const runtimeAccess = createMiddleware().server(async ({ request, next }) => {
+  const isLocalRuntime = process.env.NODE_ENV !== "production" && isLoopbackRequest(request);
+  if (!isLocalRuntime && !isHostedProductionRequest(request)) {
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   }
   return next();
@@ -73,7 +83,7 @@ type HandlerContext = { request: Request; context: { userId: string } };
 export const Route = createFileRoute("/api/ai/capacity")({
   // @ts-expect-error -- TanStack's Vite transform supports server routes, but its route type omits this property.
   server: {
-    middleware: [localOnly, requireSupabaseToken],
+    middleware: [runtimeAccess, requireSupabaseToken],
     handlers: {
       POST: async ({ request, context }: HandlerContext) => {
         let body: unknown;
