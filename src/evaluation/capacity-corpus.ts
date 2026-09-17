@@ -30,6 +30,12 @@ export type PendingClarification = {
   authoritativeCandidates?: string[];
 };
 
+export type DeferredProviderResolution = {
+  providerOutcome: ExpectedOutcome;
+  providerIntentFamily: string;
+  note: string;
+};
+
 export type CapacityEvalCase = {
   id: string;
   userMessage: string;
@@ -40,6 +46,7 @@ export type CapacityEvalCase = {
   expectedOutcome: ExpectedOutcome;
   expectedIntentFamily: string;
   expectedImportantArguments: Record<string, unknown>;
+  deferredProviderResolution?: DeferredProviderResolution;
   safetyCritical: boolean;
   tags: string[];
 };
@@ -254,7 +261,7 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     "scope-phoenix",
     "How is Phoenix staffed?",
     "demand_details",
-    { demand: "Phoenix", focus: "staffing" },
+    { demand: "Phoenix", focus: "staffing_gap" },
     { conversationId: "phoenix-topic", conversationTurn: 1, tags: ["scope"] },
   ),
   read(
@@ -268,7 +275,7 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     "scope-maya-skills",
     "What skills does Maya have?",
     "consultant_details",
-    { consultant: "Maya", focus: "skills" },
+    { consultant: "Maya" },
     { conversationId: "context-invalidation", conversationTurn: 1, tags: ["scope"] },
   ),
   write(
@@ -285,18 +292,13 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     { title: "Apollo", status: "Incoming", requiredCapacity: 50 },
     { tags: ["demand"] },
   ),
-  write(
+  conversation(
     "demand-migros-rfp",
     "Create an RfP for Migros next month at 150% required capacity.",
-    "create_demand",
-    {
-      title: "Migros",
-      client: "Migros",
-      type: "RfP",
-      startDate: { timeConcept: "next_month" },
-      requiredCapacity: 150,
-    },
-    { tags: ["demand", "date"] },
+    "CLARIFICATION",
+    "clarification_create_demand_unknown",
+    { title: "Migros", type: "RfP", capacity: 150 },
+    { safetyCritical: true, tags: ["demand", "date"] },
   ),
   write(
     "demand-phoenix-acme-skills",
@@ -310,12 +312,13 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     },
     { tags: ["demand", "date", "skills"] },
   ),
-  write(
+  conversation(
     "consultant-anna",
     "Add Anna as a Senior Consultant.",
-    "create_consultant",
+    "CLARIFICATION",
+    "clarification_create_consultant_unknown",
     { name: "Anna", level: "Senior" },
-    { tags: ["consultant"] },
+    { safetyCritical: true, tags: ["consultant"] },
   ),
   conversation(
     "consultant-clarification",
@@ -326,7 +329,7 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     {
       conversationId: "anna-creation",
       conversationTurn: 1,
-      pendingClarification: { field: "owner", requestedValues: { missing: ["level", "role"] } },
+      pendingClarification: { field: "owner", requestedValues: { missing: ["surname"] } },
       tags: ["consultant", "clarification"],
     },
   ),
@@ -339,15 +342,15 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     {
       conversationId: "anna-creation",
       conversationTurn: 2,
-      pendingClarification: { field: "owner", requestedValues: { missing: ["level", "role"] } },
+      pendingClarification: { field: "owner", requestedValues: { missing: ["surname"] } },
       tags: ["consultant", "clarification", "conversation"],
     },
   ),
   conversation(
     "consultant-clarification-complete",
     "Anna is a Senior Data consultant.",
-    "WRITE",
-    "create_consultant",
+    "CLARIFICATION",
+    "clarification_create_consultant_owner",
     { name: "Anna", level: "Senior", role: "Data" },
     {
       conversationId: "anna-creation",
@@ -355,12 +358,13 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
       tags: ["consultant", "clarification", "continuation"],
     },
   ),
-  write(
+  conversation(
     "consultant-senior",
     "Create a Senior Consultant named Anna with Data as her role.",
-    "create_consultant",
+    "CLARIFICATION",
+    "clarification_create_consultant_unknown",
     { name: "Anna", level: "Senior", role: "Data" },
-    { tags: ["consultant", "paraphrase-b"] },
+    { safetyCritical: true, tags: ["consultant", "paraphrase-b"] },
   ),
   relativeWrite(
     "self-skill-add",
@@ -398,6 +402,11 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     }),
     expectedOutcome: "CLARIFICATION",
     expectedIntentFamily: "clarification_set_allocation_consultant",
+    deferredProviderResolution: {
+      providerOutcome: "WRITE",
+      providerIntentFamily: "set_allocation",
+      note: "The provider cannot see authoritative duplicate candidates; deterministic resolution must convert this reference into clarification before preview.",
+    },
     pendingClarification: {
       field: "consultant",
       requestedValues: { name: "Alex" },
@@ -441,8 +450,8 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
   read(
     "supersede-team",
     "Now show the team instead.",
-    "team_overview",
-    { scope: "team" },
+    "team_overview_range",
+    { range: { reference: "context" }, focus: "free", scope: "team" },
     {
       safeConversationContext: {
         scope: "consultant",

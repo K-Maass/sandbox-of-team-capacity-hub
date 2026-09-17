@@ -1,8 +1,11 @@
 import {
-  CAPACITY_ASSISTANT_TOOLS,
-  parseCapacityFunctionCall,
-} from "@/server/capacity/assistant-interpreter.server";
+  CAPACITY_ASSISTANT_TOOLS_V2,
+  parseSemanticToolCall,
+} from "@/server/capacity/assistant-tools.server";
 import { runIbmFunctionCall, type IbmFunctionCall } from "@/lib/ibm-ai.server";
+import { buildCapacityAssistantPrompt } from "@/server/capacity/assistant-prompt.server";
+import type { SemanticOutcome } from "@/domain/capacity/assistant-semantic";
+import { preProviderSecurityReason } from "@/server/capacity/pre-provider-security.server";
 import type { CapacityEvalCase } from "./capacity-corpus";
 import type { EvalActual, EvalConversationState } from "./evaluator";
 
@@ -14,7 +17,7 @@ export type StateAwareProviderRequest = {
 export type FunctionCallRunner = (options: {
   instructions: string;
   input: string;
-  tools: typeof CAPACITY_ASSISTANT_TOOLS;
+  tools: typeof CAPACITY_ASSISTANT_TOOLS_V2;
 }) => Promise<IbmFunctionCall>;
 
 function safeSemanticValue(value: unknown, depth = 0): unknown {
@@ -74,22 +77,73 @@ export function createStateAwareProviderAdapter(
 ): (request: StateAwareProviderRequest) => Promise<EvalActual> {
   return async ({ testCase, state }) => {
     const safeFacts = boundedSafeProviderFacts(state);
-    const instructions = [
-      "Interpret exactly one Capacity Hub request using the supplied strict function tools.",
-      "Safe semantic context is non-authoritative; never invent IDs, rows, SQL, credentials, or candidate authority.",
-      `Safe semantic facts: ${JSON.stringify(safeFacts)}`,
-    ].join("\n");
-    const call = await runFunctionCall({
-      instructions,
-      input: testCase.userMessage,
-      tools: CAPACITY_ASSISTANT_TOOLS,
+    const guarded = preProviderSecurityReason(testCase.userMessage);
+    if (guarded) {
+      return {
+        semanticActual: {
+          outcome: "UNSUPPORTED",
+          intentFamily: "unsupported",
+          importantArguments: { reason: guarded },
+        },
+        providerResult: {
+          provider: "pre-provider-security",
+          tool: "pre-provider-security",
+          raw: { guarded: true },
+        },
+      };
+    }
+    const instructions = buildCapacityAssistantPrompt({
+      currentDate: "2026-09-15",
+      context: {
+        scope: state.safeConversationContext?.scope,
+        lastConsultant: state.safeConversationContext?.consultantLabel
+          ? { label: state.safeConversationContext.consultantLabel }
+          : undefined,
+        lastDemand: state.safeConversationContext?.demandLabel
+          ? { label: state.safeConversationContext.demandLabel }
+          : undefined,
+        lastRange: state.safeConversationContext?.range,
+        includePipeline: state.safeConversationContext?.includePipeline,
+        lastFocus: state.safeConversationContext?.focus,
+      },
+      pendingClarification: state.pendingClarification,
     });
+    let call: IbmFunctionCall;
+    try {
+      call = await runFunctionCall({
+        instructions,
+        input: testCase.userMessage,
+        tools: CAPACITY_ASSISTANT_TOOLS_V2,
+      });
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        providerResult: {
+          provider: "IBM Responses",
+          raw: { adapter: "state-aware-provider-v2", safeFacts },
+        },
+      };
+    }
+
+    let outcome: SemanticOutcome;
+    try {
+      outcome = parseSemanticToolCall(call.name, call.arguments);
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        providerResult: {
+          provider: "IBM Responses",
+          tool: call.name,
+          raw: { adapter: "state-aware-provider-v2", arguments: call.arguments, safeFacts },
+        },
+      };
+    }
     return {
-      intent: parseCapacityFunctionCall(call.name, call.arguments, "2026-09-15"),
+      intent: outcome,
       providerResult: {
         provider: "IBM Responses",
         tool: call.name,
-        raw: { adapter: "state-aware-provider", safeFacts },
+        raw: { adapter: "state-aware-provider-v2", arguments: call.arguments, safeFacts },
       },
     };
   };

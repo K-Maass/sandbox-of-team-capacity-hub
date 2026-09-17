@@ -135,12 +135,17 @@ export const Route = createFileRoute("/api/ai/capacity")({
                   ? (["AI_NOT_CONFIGURED", "The local AI runtime is not configured."] as const)
                   : error.providerCode === "timeout"
                     ? (["AI_TIMEOUT", "The AI provider timed out."] as const)
-                    : error.providerCode === "provider_unavailable"
-                      ? (["AI_UNAVAILABLE", "The AI provider is unavailable."] as const)
-                      : ([
+                    : error.providerCode === "invalid_request"
+                      ? ([
                           "AI_INVALID_RESPONSE",
                           "The AI response could not be validated.",
-                        ] as const);
+                        ] as const)
+                      : error.providerCode === "provider_unavailable"
+                        ? (["AI_UNAVAILABLE", "The AI provider is unavailable."] as const)
+                        : ([
+                            "AI_INVALID_RESPONSE",
+                            "The AI response could not be validated.",
+                          ] as const);
             const [code, message] = mapped;
             return response(
               { ok: false, error: { code, message, retryable: code !== "AI_NOT_CONFIGURED" } },
@@ -150,6 +155,7 @@ export const Route = createFileRoute("/api/ai/capacity")({
           if (error instanceof IbmAiRequestError) {
             const mapped = {
               cancelled: ["REQUEST_CANCELLED", "Request was cancelled."],
+              invalid_request: ["AI_INVALID_RESPONSE", "The AI response could not be validated."],
               invalid_response: ["AI_INVALID_RESPONSE", "The AI response could not be validated."],
               not_configured: ["AI_NOT_CONFIGURED", "The local AI runtime is not configured."],
               provider_unavailable: ["AI_UNAVAILABLE", "The AI provider is unavailable."],

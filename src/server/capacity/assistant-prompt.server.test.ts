@@ -82,6 +82,12 @@ describe("Luna V2 provider prompt", () => {
     expect(prompt).toContain("history_undo_unavailable");
     expect(prompt).toContain("API Key Migration");
     expect(prompt).toContain("multiple_changes");
+    expect(prompt).toContain("surname is");
+    expect(prompt).toContain("Who has room next week?");
+    expect(prompt).toContain("getConsultant action has no focus field");
+    expect(prompt).toContain(
+      "findStaffingCandidatesRange only for which people could staff a named demand",
+    );
     expect(prompt).not.toContain("phrase-parser");
     expect(prompt).not.toContain("00000000-0000-4000-8000-000000000001");
   });

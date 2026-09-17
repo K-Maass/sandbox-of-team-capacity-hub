@@ -27,15 +27,28 @@ export type IbmFunctionTool = {
 export type IbmFunctionCall = { name: string; arguments: string };
 
 export type IbmAiRequestErrorCode =
-  "cancelled" | "invalid_response" | "not_configured" | "provider_unavailable" | "timeout";
+  | "cancelled"
+  | "invalid_request"
+  | "invalid_response"
+  | "not_configured"
+  | "provider_unavailable"
+  | "timeout";
+
+export type IbmAiRequestDiagnostics = {
+  httpStatus?: number;
+  providerErrorCode?: string;
+  providerErrorDetail?: string;
+};
 
 export class IbmAiRequestError extends Error {
   readonly code: IbmAiRequestErrorCode;
+  readonly diagnostics?: IbmAiRequestDiagnostics;
 
-  constructor(code: IbmAiRequestErrorCode) {
+  constructor(code: IbmAiRequestErrorCode, diagnostics?: IbmAiRequestDiagnostics) {
     super(code);
     this.name = "IbmAiRequestError";
     this.code = code;
+    this.diagnostics = diagnostics;
   }
 }
 
@@ -148,6 +161,88 @@ async function readLimitedText(response: Response): Promise<string> {
   return new TextDecoder().decode(bytes);
 }
 
+const MAX_PROVIDER_ERROR_DETAIL_CHARS = 512;
+const DIAGNOSTIC_CREDENTIAL_LABEL =
+  "(?:api[_ -]?key|access[_ -]?token|service[_ -]?role(?:[_ -]?key)?|authorization|password|secret|token|jwt)";
+const DIAGNOSTIC_CREDENTIAL_ASSIGNMENT = new RegExp(
+  `['"]?\\b${DIAGNOSTIC_CREDENTIAL_LABEL}['"]?\\s*[:=]\\s*['"]?[^,;\\s}"']+`,
+  "gi",
+);
+const DIAGNOSTIC_CREDENTIAL_LITERAL = new RegExp(
+  `\\b${DIAGNOSTIC_CREDENTIAL_LABEL}\\b\\s+(?:is\\s+[A-Za-z0-9._~+/=-]{8,}\\b|(?=[A-Za-z0-9._~+/=-]{8,}\\b)(?=[A-Za-z0-9._~+/=-]*[-_.~+/=0-9])[A-Za-z0-9._~+/=-]{8,}\\b)`,
+  "gi",
+);
+const DIAGNOSTIC_JWT = /\b[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/g;
+
+function sanitizeProviderDiagnosticText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+
+  const sanitized = value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi, "Bearer [REDACTED]")
+    .replace(DIAGNOSTIC_CREDENTIAL_ASSIGNMENT, "credential=[REDACTED]")
+    .replace(DIAGNOSTIC_CREDENTIAL_LITERAL, "credential=[REDACTED]")
+    .replace(DIAGNOSTIC_JWT, "[REDACTED]")
+    .replace(/\b(?:sk|gh[pousr]|xox[baprs])[-_][A-Za-z0-9_-]{10,}\b/gi, "[REDACTED]")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return sanitized.length > 0 ? sanitized.slice(0, MAX_PROVIDER_ERROR_DETAIL_CHARS) : undefined;
+}
+
+function sanitizeProviderErrorCode(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_.-]{1,100}$/.test(value)) return undefined;
+  return value;
+}
+
+function embeddedProviderErrorCode(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = value.match(/"code"\s*:\s*"([A-Za-z0-9_.-]{1,100})"/);
+  return match?.[1];
+}
+
+function providerErrorDiagnostics(httpStatus: number, body: string): IbmAiRequestDiagnostics {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return {
+      httpStatus,
+      providerErrorDetail: sanitizeProviderDiagnosticText(body),
+    };
+  }
+
+  const error = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : undefined;
+  const providerErrorCode =
+    embeddedProviderErrorCode(error?.message) ?? sanitizeProviderErrorCode(error?.code);
+  const message = sanitizeProviderDiagnosticText(error?.message ?? error?.detail);
+  const parameter = sanitizeProviderDiagnosticText(error?.param);
+  const providerErrorDetail = [message, parameter ? `param=${parameter}` : undefined]
+    .filter((part): part is string => part !== undefined)
+    .join("; ");
+
+  return {
+    httpStatus,
+    providerErrorCode,
+    providerErrorDetail: providerErrorDetail || sanitizeProviderDiagnosticText(body),
+  };
+}
+
+async function readProviderErrorDiagnostics(response: Response): Promise<IbmAiRequestDiagnostics> {
+  try {
+    return providerErrorDiagnostics(response.status, await readLimitedText(response));
+  } catch {
+    await response.body?.cancel();
+    return {
+      httpStatus: response.status,
+      providerErrorDetail: "Provider error body was unavailable or exceeded the diagnostic limit.",
+    };
+  }
+}
+
+function classifyProviderHttpStatus(status: number): IbmAiRequestErrorCode {
+  return status >= 400 && status < 500 ? "invalid_request" : "provider_unavailable";
+}
+
 export async function runIbmFunctionCall(options: {
   instructions: string;
   input: string;
@@ -203,8 +298,8 @@ export async function runIbmFunctionCall(options: {
   }
   try {
     if (!response.ok) {
-      await response.body?.cancel();
-      throw new IbmAiRequestError("provider_unavailable");
+      const diagnostics = await readProviderErrorDiagnostics(response);
+      throw new IbmAiRequestError(classifyProviderHttpStatus(response.status), diagnostics);
     }
 
     let payload: unknown;

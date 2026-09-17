@@ -1,6 +1,7 @@
 // @ts-expect-error -- Bun provides this module at test runtime; app builds do not include Bun types.
 import { describe, expect, test } from "bun:test";
 import { CAPACITY_EVAL_CORPUS, REQUIRED_EVAL_FAMILIES } from "./capacity-corpus";
+import { CAPACITY_GENERALIZATION_CORPUS } from "./capacity-generalization-corpus";
 import { evaluateCorpus, redactEvaluation } from "./evaluator";
 import { createLegacyV1Adapter, toLegacyV1AdapterInput } from "./legacy-v1-adapter";
 import { createStateAwareProviderAdapter } from "./state-aware-provider-adapter";
@@ -12,7 +13,9 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
       "follow-ups": (item) => item.tags.includes("follow-up") && Boolean(item.conversationId),
       scope: (item) => item.tags.includes("scope"),
       "demand creation": (item) => item.expectedIntentFamily === "create_demand",
-      "consultant creation": (item) => item.expectedIntentFamily === "create_consultant",
+      "consultant creation": (item) =>
+        item.expectedIntentFamily === "create_consultant" ||
+        item.expectedIntentFamily.startsWith("clarification_create_consultant"),
       "self skills": (item) =>
         item.expectedIntentFamily === "change_consultant_skill" &&
         item.expectedOutcome === "RELATIVE_WRITE",
@@ -44,6 +47,21 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
       expect(item.expectedImportantArguments).toBeDefined();
       expect(JSON.stringify(item)).not.toMatch(/00000000-0000|eyJ[a-zA-Z0-9_-]+\./);
     }
+  });
+
+  test("includes independent paraphrase coverage across repaired semantic clusters", () => {
+    expect(CAPACITY_GENERALIZATION_CORPUS.length).toBeGreaterThanOrEqual(12);
+    expect(new Set(CAPACITY_GENERALIZATION_CORPUS.map((item) => item.id)).size).toBe(
+      CAPACITY_GENERALIZATION_CORPUS.length,
+    );
+    for (const item of CAPACITY_GENERALIZATION_CORPUS) {
+      expect(item.tags).toContain("generalization");
+      expect(item.userMessage.length).toBeGreaterThan(0);
+      expect(JSON.stringify(item)).not.toMatch(/00000000-0000|eyJ[a-zA-Z0-9_-]+\./);
+    }
+    expect(
+      new Set(CAPACITY_GENERALIZATION_CORPUS.flatMap((item) => item.tags)).size,
+    ).toBeGreaterThanOrEqual(8);
   });
 
   test("matches semantic expected outcomes and arguments", async () => {
@@ -88,7 +106,8 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
 
   test("compares authoritative ambiguity labels separately from language semantics", async () => {
     const ambiguity = CAPACITY_EVAL_CORPUS.find((item) => item.id === "ambiguity-alex")!;
-    const good = await evaluateCorpus([ambiguity], () => ({
+    const strictAmbiguity = { ...ambiguity, deferredProviderResolution: undefined };
+    const good = await evaluateCorpus([strictAmbiguity], () => ({
       semanticActual: {
         outcome: "CLARIFICATION",
         intentFamily: "clarification_set_allocation_consultant",
@@ -96,7 +115,7 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
         authoritativeCandidates: ["Alex Meyer", "Alex Smith"],
       },
     }));
-    const bad = await evaluateCorpus([ambiguity], () => ({
+    const bad = await evaluateCorpus([strictAmbiguity], () => ({
       semanticActual: {
         outcome: "CLARIFICATION",
         intentFamily: "clarification_set_allocation_consultant",
@@ -107,6 +126,25 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
     expect(good.passed).toBe(1);
     expect(bad.failed).toBe(1);
     expect(bad.cases[0].authoritativeCandidateDifferences).toHaveLength(1);
+  });
+
+  test("scores ambiguity at the provider layer when deterministic resolution is deferred", async () => {
+    const ambiguity = CAPACITY_EVAL_CORPUS.find((item) => item.id === "ambiguity-alex")!;
+    const report = await evaluateCorpus([ambiguity], () => ({
+      intent: {
+        type: "write",
+        action: {
+          kind: "setAllocation",
+          consultant: { kind: "name", name: "Alex" },
+          demand: { kind: "name", name: "Phoenix" },
+          capacity: 50,
+        },
+      },
+    }));
+    expect(report.passed).toBe(1);
+    expect(report.cases[0].evaluationLayer).toBe("deferred_deterministic_resolution");
+    expect(report.cases[0].providerExpectation?.intentFamily).toBe("set_allocation");
+    expect(report.cases[0].authoritativeCandidateDifferences).toHaveLength(0);
   });
 
   test("passes safe context and pending clarification through the live adapter boundary", async () => {
@@ -138,12 +176,16 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
         input: options.input,
       });
       return {
-        name: "read_get_capacity",
+        name: "emit_capacity_read",
         arguments: JSON.stringify({
-          consultant: "me",
-          onDate: "2026-09-21",
-          includePipeline: false,
-          focus: "committed",
+          action: {
+            kind: "getCapacity",
+            consultant: { kind: "self" },
+            onDate: { kind: "date", date: "2026-09-21" },
+            includePipeline: false,
+            focus: "committed",
+          },
+          presentation: null,
         }),
       };
     });
@@ -164,7 +206,7 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
     });
     expect(serializedRequest).toContain("Karim Maass");
     expect(serializedRequest).toContain("next week");
-    expect(serializedRequest).toContain("requestedValues");
+    expect(serializedRequest).toContain("pendingClarification");
     expect(serializedRequest).not.toContain("Alex Meyer");
     expect(serializedRequest).not.toContain("00000000-0000");
     expect(serializedRequest).not.toContain("Bearer secret");
@@ -176,12 +218,16 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
     const adapter = createStateAwareProviderAdapter(async (options) => {
       requests.push(options.instructions);
       return {
-        name: "read_get_capacity",
+        name: "emit_capacity_read",
         arguments: JSON.stringify({
-          consultant: "Karim",
-          onDate: "2026-09-15",
-          includePipeline: false,
-          focus: "free",
+          action: {
+            kind: "getCapacity",
+            consultant: { kind: "name", name: "Karim" },
+            onDate: { kind: "date", date: "2026-09-15" },
+            includePipeline: false,
+            focus: "free",
+          },
+          presentation: null,
         }),
       };
     });
@@ -214,12 +260,16 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
     const adapter = createStateAwareProviderAdapter(async (options) => {
       instructions = options.instructions;
       return {
-        name: "read_get_capacity",
+        name: "emit_capacity_read",
         arguments: JSON.stringify({
-          consultant: "Karim",
-          onDate: "2026-09-15",
-          includePipeline: false,
-          focus: "free",
+          action: {
+            kind: "getCapacity",
+            consultant: { kind: "name", name: "Karim" },
+            onDate: { kind: "date", date: "2026-09-15" },
+            includePipeline: false,
+            focus: "free",
+          },
+          presentation: null,
         }),
       };
     });
@@ -276,5 +326,61 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
     expect(JSON.stringify(sensitiveKeys)).not.toContain("actual-secret");
     expect(JSON.stringify(sensitiveKeys)).not.toContain("actual-api-key");
     expect(JSON.stringify(sensitiveKeys)).toContain("Secret Rotation");
+
+    const opaqueStrings = redactEvaluation([
+      'service_role_key="quoted-service-secret"',
+      '{"jwt":"abcde.fghij.klmno"}',
+      "service_role_key=opaque-service-secret",
+      "secret is supersecretvalue",
+    ]);
+    expect(JSON.stringify(opaqueStrings)).not.toContain("quoted-service-secret");
+    expect(JSON.stringify(opaqueStrings)).not.toContain("abcde.fghij.klmno");
+    expect(JSON.stringify(opaqueStrings)).not.toContain("opaque-service-secret");
+    expect(JSON.stringify(opaqueStrings)).not.toContain("supersecretvalue");
+  });
+
+  test("evaluates canonical V2 ranges, team scope, and staffing-gap focus", async () => {
+    const cases = [
+      CAPACITY_EVAL_CORPUS.find((item) => item.id === "capacity-team-two-weeks")!,
+      CAPACITY_EVAL_CORPUS.find((item) => item.id === "scope-phoenix")!,
+      CAPACITY_EVAL_CORPUS.find((item) => item.id === "supersede-team")!,
+    ];
+    const report = await evaluateCorpus(cases, (item) => {
+      if (item.id === "capacity-team-two-weeks")
+        return {
+          intent: {
+            type: "read",
+            action: {
+              kind: "getTeamOverviewRange",
+              range: { kind: "week_range", startWeekOffset: 1, durationWeeks: 2 },
+              includePipeline: false,
+              focus: "free",
+            },
+          },
+        };
+      if (item.id === "scope-phoenix")
+        return {
+          intent: {
+            type: "read",
+            action: {
+              kind: "getDemand",
+              demand: { kind: "name", name: "Phoenix" },
+              focus: "staffing_gap",
+            },
+          },
+        };
+      return {
+        intent: {
+          type: "read",
+          action: {
+            kind: "getTeamOverviewRange",
+            range: { kind: "current_context" },
+            includePipeline: false,
+            focus: "free",
+          },
+        },
+      };
+    });
+    expect(report.failed).toBe(0);
   });
 });

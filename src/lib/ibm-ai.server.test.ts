@@ -66,6 +66,61 @@ describe("IBM Responses function-call adapter", () => {
     await expect(request()).rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  test("classifies HTTP 400 as an invalid provider request with sanitized diagnostics", async () => {
+    process.env["IBM_SERVICES_API_KEY"] = "configured-for-test";
+    globalThis.fetch = async () =>
+      Response.json(
+        {
+          error: {
+            code: "400",
+            message:
+              'Invalid schema for function; {"error":{"code":"invalid_function_parameters","api_key":"provider-secret-value"}} Bearer super-secret-value and secret provider-secret-value must not appear in diagnostics.',
+            param: "tools[0].parameters",
+          },
+        },
+        { status: 400 },
+      );
+
+    const error = await request().catch((value: unknown) => value);
+    expect(error).toMatchObject({
+      code: "invalid_request",
+      diagnostics: {
+        httpStatus: 400,
+        providerErrorCode: "invalid_function_parameters",
+      },
+    });
+    expect((error as IbmAiRequestError).diagnostics?.providerErrorDetail).toContain(
+      "param=tools[0].parameters",
+    );
+    expect((error as IbmAiRequestError).diagnostics?.providerErrorDetail).toContain(
+      "Bearer [REDACTED]",
+    );
+    expect((error as Error).message).toBe("invalid_request");
+    expect(JSON.stringify(error)).not.toContain("super-secret-value");
+    expect(JSON.stringify(error)).not.toContain("provider-secret-value");
+  });
+
+  test("redacts opaque, quoted JSON, and bare JWT secrets from diagnostics", async () => {
+    process.env["IBM_SERVICES_API_KEY"] = "configured-for-test";
+    globalThis.fetch = async () =>
+      Response.json(
+        {
+          error: {
+            code: "invalid_function_parameters",
+            message:
+              '{"service_role_key":"quoted-service-secret","jwt":"abcde.fghij.klmno"} service_role_key=opaque-service-secret',
+          },
+        },
+        { status: 400 },
+      );
+
+    const error = await request().catch((value: unknown) => value);
+    const detail = (error as IbmAiRequestError).diagnostics?.providerErrorDetail ?? "";
+    expect(detail).not.toContain("quoted-service-secret");
+    expect(detail).not.toContain("abcde.fghij.klmno");
+    expect(detail).not.toContain("opaque-service-secret");
+  });
+
   test("distinguishes cancellation and timeout", async () => {
     process.env["IBM_SERVICES_API_KEY"] = "configured-for-test";
     globalThis.fetch = (_input, init) =>

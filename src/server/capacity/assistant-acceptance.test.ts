@@ -812,8 +812,8 @@ describe("Luna V2 Capacity Hub acceptance conversations", () => {
               runFunctionCall: async () => {
                 providerCalls += 1;
                 return {
-                  name: "emit_capacity_semantic_outcome",
-                  arguments: JSON.stringify({ type: "conversation_or_help", topic: "howToUse" }),
+                  name: "emit_capacity_conversation_help",
+                  arguments: JSON.stringify({ topic: "howToUse" }),
                 };
               },
             }),

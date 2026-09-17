@@ -12,6 +12,8 @@ const CREDENTIAL_IS_PATTERN = new RegExp(
   `\\b${CREDENTIAL_LABEL_PATTERN}\\s+is\\s+[A-Za-z0-9._~+/=-]{8,}\\b`,
   "i",
 );
+const CREDENTIAL_ACCESS_SUFFIX =
+  "(?:\\s+(?:value|it|itself|please|now|immediately|for\\s+me|to\\s+me|right\\s+now))*\\s*[.!?]*$";
 const CAPACITY_TABLE_PATTERN = "(?:consultants|demands|allocations|availability_blocks)";
 const SQL_PAYLOAD_PATTERNS = [
   /\bselect\s+1\b/i,
@@ -33,9 +35,14 @@ const SQL_PAYLOAD_PATTERNS = [
 export function preProviderSecurityReason(message: string): "security_request" | null {
   const normalized = message.toLowerCase();
   const credentialAccess =
-    /\b(?:reveal|show|disclose|tell|give|use|access|provide|send|store|expose|print|retrieve|what\s+is)\b[\s\S]{0,48}\b(?:your\s+|my\s+|the\s+)?(?:jwt|bearer\s+token|service[-\s]?role\s+key|api\s+key|access\s+token|secret|credential|password|IBM_SERVICES_API_KEY|IBM_ICA_API_KEY|SUPABASE_SERVICE_ROLE_KEY)\b(?:\s+(?:value|it|itself|please))?\s*[.!?]*$/i.test(
-      normalized,
-    );
+    new RegExp(
+      `\\b(?:reveal|show|disclose|tell|give|use|access|provide|send|store|expose|print|retrieve|what\\s+is)\\b[\\s\\S]{0,48}\\b(?:your\\s+|my\\s+|the\\s+)(?:jwt|bearer\\s+token|service[-\\s]?role\\s+key|api\\s+key|access\\s+token|secret|credential|password|IBM_SERVICES_API_KEY|IBM_ICA_API_KEY|SUPABASE_SERVICE_ROLE_KEY)\\b${CREDENTIAL_ACCESS_SUFFIX}`,
+      "i",
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:reveal|show|disclose|tell|give|use|access|provide|send|store|expose|print|retrieve|what\\s+is)\\b[\\s\\S]{0,48}\\b(?:jwt|bearer\\s+token|service[-\\s]?role\\s+key|IBM_SERVICES_API_KEY|IBM_ICA_API_KEY|SUPABASE_SERVICE_ROLE_KEY)\\b${CREDENTIAL_ACCESS_SUFFIX}`,
+      "i",
+    ).test(normalized);
   const sqlRequest =
     /\b(execute|run|write|generate|reveal)\b.{0,30}\bsql\b/.test(normalized) ||
     SQL_PAYLOAD_PATTERNS.some((pattern) => pattern.test(message));

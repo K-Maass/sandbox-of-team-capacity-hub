@@ -53,15 +53,18 @@ export type CapacityV2InterpreterErrorCode =
 export class CapacityV2InterpreterError extends Error {
   readonly code: CapacityV2InterpreterErrorCode;
   readonly providerCode?: import("@/lib/ibm-ai.server").IbmAiRequestErrorCode;
+  readonly providerDiagnostics?: import("@/lib/ibm-ai.server").IbmAiRequestDiagnostics;
 
   constructor(
     code: CapacityV2InterpreterErrorCode,
     providerCode?: import("@/lib/ibm-ai.server").IbmAiRequestErrorCode,
+    providerDiagnostics?: import("@/lib/ibm-ai.server").IbmAiRequestDiagnostics,
   ) {
     super(code);
     this.name = "CapacityV2InterpreterError";
     this.code = code;
     this.providerCode = providerCode;
+    this.providerDiagnostics = providerDiagnostics;
   }
 }
 
@@ -157,6 +160,7 @@ export async function interpretCapacityMessageV2(
     throw new CapacityV2InterpreterError(
       "CAPACITY_V2_PROVIDER_ERROR",
       error instanceof IbmAiRequestError ? error.code : undefined,
+      error instanceof IbmAiRequestError ? error.diagnostics : undefined,
     );
   }
 
