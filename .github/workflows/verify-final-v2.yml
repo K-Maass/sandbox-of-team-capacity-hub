@@ -1,7 +1,8 @@
-name: Verify final Team Capacity Hub
+name: Verify Team Capacity Hub
 on:
   push:
     branches:
+      - main
       - verify/final-v2
 permissions:
   contents: read
