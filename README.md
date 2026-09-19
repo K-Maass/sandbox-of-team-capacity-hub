@@ -1,6 +1,6 @@
 # Team Capacity Hub
 
-A small shared staffing board for a consulting team. It shows who has capacity, what demand is coming in, who is allocated where, and how that picture changes over the next few weeks — without turning into a full resource-management system.
+A shared staffing and capacity-planning application for a consulting team, with a production-gated natural-language assistant. The board tracks people, demand, allocations and forward capacity; the assistant translates conversational requests into typed reads or previewed changes without giving the model direct access to the database.
 
 ## What it does
 
@@ -22,6 +22,52 @@ A small shared staffing board for a consulting team. It shows who has capacity, 
 - Over-allocation warnings without blocking intentional exceptions.
 - Shared changes arrive immediately through Supabase Realtime, with 15-second polling and window-focus refresh as a fallback.
 - **Insights** focused on actionable staffing issues: utilization, free capacity, overbooking, unstaffed demand and status distribution.
+
+## Capacity Assistant
+
+The repository's current `main` includes the **Luna V2** assistant path and the authenticated hosted runtime.
+
+The design deliberately separates probabilistic language understanding from deterministic business execution:
+
+```
+user message
+    │
+    ▼
+pre-provider security guard
+    │
+    ▼
+Luna function/tool call
+(semantic meaning only)
+    │
+    ▼
+strict schema parsing
+    │
+    ▼
+deterministic compiler
+against authoritative server-loaded state
+    │
+    ├── read → deterministic query/presentation
+    └── write → typed preview → explicit confirmation → mutation
+```
+
+### Safety and reliability boundaries
+
+- The model produces **semantic intent only**; it never receives a database handle and never executes SQL.
+- Tool output is schema-validated and compiled against authoritative application state on the server.
+- Ambiguous people, demands, dates or conversational references enter a bounded clarification flow rather than being guessed.
+- Writes are previewed and require explicit confirmation; stale previews/conflicting state are rejected.
+- Pre-provider guards reject credential exfiltration, pasted secrets, raw SQL requests and confirmation-bypass attempts before they reach the model.
+- Provider responses, request sizes and execution time are bounded; provider diagnostics are redacted.
+- Hosted access is restricted to authenticated requests and an explicitly enabled Vercel production runtime.
+- The repository includes a conversational evaluation corpus, generalization cases and synthetic acceptance coverage.
+
+Run the assistant evaluation harness with:
+
+```bash
+bun run eval:capacity
+```
+
+This is the part of the project that turns the staffing board from a CRUD application into an AI systems project: the LLM is used where language ambiguity is useful, while state resolution and business effects remain deterministic and testable.
 
 ## Simple permission model
 
@@ -142,3 +188,4 @@ For source-code handoff, share the repository or a source ZIP from Lovable/GitHu
 - `bun run build:dev` — development-mode build
 - `bun run lint` — ESLint
 - `bun run format` — Prettier
+- `bun run eval:capacity` — run the assistant evaluation harness
