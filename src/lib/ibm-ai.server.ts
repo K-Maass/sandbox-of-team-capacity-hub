@@ -58,7 +58,13 @@ function getIbmServicesApiKey(): string | undefined {
 
   // Vercel env values are sometimes pasted with surrounding typographic/ASCII quotes.
   // Strip only boundary quote characters and whitespace; never alter the token body.
-  const cleaned = raw.trim().replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, "");
+  const cleaned = raw
+    .trim()
+    // IBM bearer credentials are ASCII. Remove common smart-quote/invisible
+    // characters that can be introduced by rich-text copy/paste.
+    .replace(/[“”‘’]/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/^[`"']+|[`"']+$/g, "");
   return cleaned || undefined;
 }
 
