@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "eval:capacity": "bun run src/evaluation/runner.ts"
+    "eval:capacity": "bun run src/evaluation/runner.ts",
+    "eval:capacity:novice": "bun run src/evaluation/runner.ts --novice"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
