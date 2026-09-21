@@ -783,6 +783,27 @@ function errorResponse(
   };
 }
 
+function domainMessageResponse(
+  error: { code: string; message: string },
+  currentDate: string,
+  context?: ConversationContext,
+): AssistantResponse | null {
+  if (error.code !== "NOT_FOUND" && error.code !== "VALIDATION_ERROR") return null;
+  const detail = error.message.trim().replace(/[.!?]+$/, "");
+  const message =
+    error.code === "NOT_FOUND"
+      ? `I couldn't complete that request: ${detail}. Check the consultant, demand, or current state and try again.`
+      : `That request needs a change before I can apply it: ${detail}.`;
+  return {
+    ok: true,
+    kind: "domain_message",
+    code: error.code,
+    message,
+    currentDate,
+    ...(context ? { context } : {}),
+  };
+}
+
 function withPendingClarification(
   response: AssistantResponse,
   pendingClarification: PendingClarification | null,
@@ -1471,7 +1492,11 @@ async function presentActionable(
       context,
     };
   }
-  if (!result.ok) return errorResponse(result.error.code, result.error.message, currentDate);
+  if (!result.ok) {
+    const domainMessage = domainMessageResponse(result.error, currentDate, context);
+    if (domainMessage) return domainMessage;
+    return errorResponse(result.error.code, result.error.message, currentDate, false, context);
+  }
   if (intent.type === "read") {
     const presentation = readPresentation(intent, result.data);
     const data = await repository.load();
@@ -2088,6 +2113,10 @@ async function handleV2Cutover(
         // cannot be constructed from the same authoritative snapshot.
       }
     }
+    if (error instanceof CapacityActionFailure) {
+      const domainMessage = domainMessageResponse(error.detail, currentDate, validatedContext);
+      if (domainMessage) return finish(domainMessage);
+    }
     const isWriteCutover =
       options.allowWrites === true &&
       (outcome.type === "write" || outcome.type === "relativeWrite");
@@ -2115,6 +2144,8 @@ async function handleV2Cutover(
         validatedContext,
       );
       if (clarification) return finish(clarification);
+      const domainMessage = domainMessageResponse(error.detail, currentDate, validatedContext);
+      if (domainMessage) return finish(domainMessage);
     }
     const writeFailure =
       options.allowWrites === true && (intent.type === "write" || intent.type === "relativeWrite");
@@ -2278,6 +2309,8 @@ export async function handleCapacityAssistant(
         validatedContext,
       );
       if (clarification) return finish(clarification);
+      const domainMessage = domainMessageResponse(error.detail, currentDate, validatedContext);
+      if (domainMessage) return finish(domainMessage);
       return finish(errorResponse(error.detail.code, error.detail.message, currentDate));
     }
     throw error;
