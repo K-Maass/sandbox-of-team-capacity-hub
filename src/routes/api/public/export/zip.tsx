@@ -53,6 +53,7 @@ async function addDirectory(zip: JSZip, root: string, dir: string) {
 }
 
 export const Route = createFileRoute("/api/public/export/zip")({
+  // @ts-expect-error -- TanStack's Vite transform supports server routes, but its route type omits this property.
   server: {
     handlers: {
       GET: async () => {

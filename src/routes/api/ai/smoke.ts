@@ -33,11 +33,16 @@ const localOnly = createMiddleware().server(async ({ request, next }) => {
   return next();
 });
 
+type SmokeHandlerContext = {
+  context: { userId: string };
+};
+
 export const Route = createFileRoute("/api/ai/smoke")({
+  // @ts-expect-error -- TanStack's Vite transform supports server routes, but its route type omits this property.
   server: {
     middleware: [localOnly, requireSupabaseToken],
     handlers: {
-      POST: async ({ context }) => {
+      POST: async ({ context }: SmokeHandlerContext) => {
         const userId: string = context.userId;
         void userId;
 

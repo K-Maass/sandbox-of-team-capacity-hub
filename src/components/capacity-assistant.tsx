@@ -46,6 +46,7 @@ type AssistantContextValue = { enabled: boolean; open: () => void };
 const AssistantContext = createContext<AssistantContextValue>({ enabled: false, open: () => {} });
 
 function localAssistantEnabled(): boolean {
+  if (import.meta.env.VITE_CAPACITY_AI_HOSTED === "true") return true;
   if (!import.meta.env.DEV || typeof window === "undefined") return false;
   return ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
 }

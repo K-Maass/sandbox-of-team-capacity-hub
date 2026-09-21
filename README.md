@@ -137,6 +137,18 @@ VITE_SUPABASE_PUBLISHABLE_KEY=...
 
 The server-side equivalents used by generated Lovable helpers are also documented in `.env.example`.
 
+### Hosted Capacity Assistant deployment
+
+For the Vercel production deployment, configure these environment variables:
+
+```text
+VITE_CAPACITY_AI_HOSTED=true
+CAPACITY_AI_HOSTED=true
+IBM_SERVICES_API_KEY=<private secret>
+```
+
+Set the two flags for Preview as well if the assistant should be visible in preview deployments. Keep `IBM_SERVICES_API_KEY` server-only and add it through Vercel's encrypted environment-variable settings; never commit it or expose it through a `VITE_*` variable. The existing `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY` values remain required.
+
 2. Install dependencies:
 
 ```bash
