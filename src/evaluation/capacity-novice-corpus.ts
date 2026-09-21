@@ -593,12 +593,36 @@ const relativeWrite = forty("relative-write", (index) => {
   );
 });
 
+const FOLLOWUP_POINT_DATES = [
+  "2026-09-16",
+  "2026-09-17",
+  "2026-09-21",
+  "2026-09-22",
+  "2026-09-23",
+  "2026-09-24",
+  "2026-09-25",
+  "2026-09-30",
+] as const;
+
+const FOLLOWUP_RANGES = [
+  { startDate: "2026-09-14", endDate: "2026-09-18", label: "this week" },
+  { startDate: "2026-09-21", endDate: "2026-09-25", label: "next week" },
+  { startDate: "2026-09-21", endDate: "2026-10-02", label: "the next two weeks" },
+  { startDate: "2026-09-28", endDate: "2026-10-02", label: "the week after next" },
+  { startDate: "2026-09-21", endDate: "2026-10-09", label: "the next three weeks" },
+  { startDate: "2026-10-01", endDate: "2026-10-31", label: "next month" },
+  { startDate: "2026-09-28", endDate: "2026-09-30", label: "end of September" },
+  { startDate: "2026-10-05", endDate: "2026-10-09", label: "the first full week of October" },
+] as const;
+
 const followUp = forty("follow-up-context", (index) => {
   const variant = index % 5;
+  const contextIndex = Math.floor(index / 5);
+  const contextRange = FOLLOWUP_RANGES[contextIndex];
   const rangeContext: SafeConversationContext = {
     scope: "consultant",
-    consultantLabel: CONSULTANTS[Math.floor(index / 5) % CONSULTANTS.length],
-    range: { startDate: "2026-09-21", endDate: "2026-09-25", label: "next week" },
+    consultantLabel: CONSULTANTS[contextIndex % CONSULTANTS.length],
+    range: { ...contextRange },
     focus: "free",
   };
   if (variant === 0)
@@ -609,7 +633,7 @@ const followUp = forty("follow-up-context", (index) => {
       "READ",
       "capacity_range",
       { consultant: { reference: "context" }, range: { reference: "context" }, focus: "pipeline", includePipeline: true },
-      { safeConversationContext: rangeContext, conversationId: `novice-followup-${Math.floor(index / 5)}`, conversationTurn: 2 },
+      { safeConversationContext: rangeContext, conversationId: `novice-followup-${contextIndex}`, conversationTurn: 2 },
     );
   if (variant === 1)
     return makeCase(
@@ -619,12 +643,15 @@ const followUp = forty("follow-up-context", (index) => {
       "READ",
       "capacity_range",
       { consultant: { reference: "context" }, range: { reference: "context" }, focus: "breakdown" },
-      { safeConversationContext: rangeContext, conversationId: `novice-followup-${Math.floor(index / 5)}`, conversationTurn: 3 },
+      { safeConversationContext: rangeContext, conversationId: `novice-followup-${contextIndex}`, conversationTurn: 3 },
     );
   if (variant === 2) {
     const pointContext: SafeConversationContext = {
       scope: "team",
-      range: { startDate: "2026-09-22", endDate: "2026-09-22" },
+      range: {
+        startDate: FOLLOWUP_POINT_DATES[contextIndex],
+        endDate: FOLLOWUP_POINT_DATES[contextIndex],
+      },
       focus: "free",
     };
     return makeCase(
@@ -634,13 +661,13 @@ const followUp = forty("follow-up-context", (index) => {
       "READ",
       "list_consultants",
       { onDate: { reference: "context" }, capacityFilter: "available", scope: "team" },
-      { safeConversationContext: pointContext, conversationId: `novice-followup-${Math.floor(index / 5)}`, conversationTurn: 2 },
+      { safeConversationContext: pointContext, conversationId: `novice-followup-${contextIndex}`, conversationTurn: 2 },
     );
   }
   if (variant === 3) {
     const teamRangeContext: SafeConversationContext = {
       scope: "team",
-      range: { startDate: "2026-09-21", endDate: "2026-09-25" },
+      range: { ...contextRange },
       focus: "free",
     };
     return makeCase(
@@ -650,7 +677,7 @@ const followUp = forty("follow-up-context", (index) => {
       "READ",
       "team_overview_range",
       { range: { reference: "context" }, scope: "team" },
-      { safeConversationContext: teamRangeContext, conversationId: `novice-followup-${Math.floor(index / 5)}`, conversationTurn: 2 },
+      { safeConversationContext: teamRangeContext, conversationId: `novice-followup-${contextIndex}`, conversationTurn: 2 },
     );
   }
   return makeCase(
@@ -660,7 +687,7 @@ const followUp = forty("follow-up-context", (index) => {
     "READ",
     "capacity_range",
     { consultant: CONSULTANTS[(index + 1) % CONSULTANTS.length], range: { reference: "context" } },
-    { safeConversationContext: rangeContext, conversationId: `novice-followup-${Math.floor(index / 5)}`, conversationTurn: 4 },
+    { safeConversationContext: rangeContext, conversationId: `novice-followup-${contextIndex}`, conversationTurn: 4 },
   );
 });
 
