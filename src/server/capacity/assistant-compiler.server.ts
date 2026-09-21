@@ -324,6 +324,13 @@ function resolvePoint(ref: SemanticPointTimeRef, options: ValidatedOptions, fiel
           },
         );
       }
+      if (options.context.lastRange.startDate !== options.context.lastRange.endDate) {
+        throw new CapacityActionFailure(
+          "VALIDATION_ERROR",
+          "The current context is a range, not a point date",
+          { field },
+        );
+      }
       value = options.context.lastRange.startDate;
       break;
   }
@@ -411,6 +418,22 @@ function compileRead(
         read,
         action.capacityFilter === "available" ? "available_consultants" : presentation,
       );
+    case "listConsultantsRange": {
+      const range = rangeActionDates(action.range, options, "action.range");
+      read = readActionSchema.parse({
+        kind: action.kind,
+        status: action.status,
+        role: action.role,
+        level: action.level,
+        skills: action.skills,
+        ...range,
+        includePipeline: action.includePipeline,
+      });
+      return readIntent(
+        read,
+        action.capacityFilter === "available" ? "available_consultants" : presentation,
+      );
+    }
     case "getConsultant":
       read = readActionSchema.parse({
         kind: action.kind,

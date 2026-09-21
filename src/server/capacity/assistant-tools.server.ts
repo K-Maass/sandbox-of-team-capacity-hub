@@ -26,6 +26,7 @@ const productHelpTopics = [
 
 const semanticIntentFamilies = [
   "list_consultants",
+  "list_consultants_range",
   "consultant_details",
   "list_demands",
   "demand_details",
@@ -254,6 +255,7 @@ const providerBlockSchema = providerObjectSchema({
 
 const readActionKinds = [
   "listConsultants",
+  "listConsultantsRange",
   "getConsultant",
   "listDemands",
   "getDemand",
@@ -346,7 +348,7 @@ const providerReadActionSchema = providerActionSchema(
     helpTopic: providerOptional(enumSchema(productHelpTopics)),
     skillQuery: providerOptional(providerSafeText(100)),
   },
-  "Choose the single read action matching the user's goal. Use getCapacity for one consultant at a point date, getCapacityRange for one consultant over a range, getTeamOverviewRange for team capacity over a range, getTeamOverview for a point-in-time team snapshot, findAvailabilityWindows only for explicit thresholded open-window searches, findSuitableDemands only for demands a named consultant could take on, findStaffingCandidatesRange only for people who could staff a named demand, and getConsultant for consultant details without focus.",
+  "Choose the single read action matching the user's goal. Use listConsultants for WHICH people have capacity or match consultant criteria at a point date, and listConsultantsRange for WHICH people have capacity or match consultant criteria across a range. Use getCapacity for one consultant at a point date, getCapacityRange for one consultant over a range, getTeamOverviewRange only for aggregate team capacity over a range, and getTeamOverview only for aggregate point-in-time team totals. Use findAvailabilityWindows only for explicit thresholded open-window searches, findSuitableDemands only for demands a named consultant could take on, findStaffingCandidatesRange only for people who could staff a named demand, and getConsultant for consultant details without focus.",
 );
 
 const providerWriteActionSchema = providerActionSchema(
@@ -860,7 +862,7 @@ function normalizeProviderValue(value: unknown, shape: ProviderNormalizationShap
   if (shape === "action") {
     const kind = value.kind;
     const aliases: Record<string, string> = {
-      ...(kind === "listConsultants"
+      ...((kind === "listConsultants" || kind === "listConsultantsRange")
         ? {
             consultantStatus: "status",
             consultantRole: "role",
@@ -936,12 +938,15 @@ function normalizeProviderValue(value: unknown, shape: ProviderNormalizationShap
       delete output.skillsAllOf;
     }
 
-    if (value.kind === "listConsultants" && Array.isArray(output.skills)) {
+    if (
+      (value.kind === "listConsultants" || value.kind === "listConsultantsRange") &&
+      Array.isArray(output.skills)
+    ) {
       output.skills = { anyOf: output.skills };
     }
 
     const statusKey =
-      kind === "listConsultants"
+      kind === "listConsultants" || kind === "listConsultantsRange"
         ? "consultantStatus"
         : kind === "listDemands"
           ? "demandStatus"

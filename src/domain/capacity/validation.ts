@@ -191,6 +191,21 @@ const readActionBaseSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      kind: z.literal("listConsultantsRange"),
+      status: z.enum(["active", "archived", "all"]).default("active"),
+      role: roleSchema.optional(),
+      level: levelSchema.optional(),
+      skills: z
+        .object({ anyOf: skillsSchema.optional(), allOf: skillsSchema.optional() })
+        .strict()
+        .optional(),
+      startDate: isoDateSchema,
+      endDate: isoDateSchema,
+      includePipeline: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("getConsultant"),
       consultant: consultantRefSchema,
       onDate: isoDateSchema.optional(),

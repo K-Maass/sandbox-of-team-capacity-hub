@@ -272,6 +272,17 @@ export type AssistantPersonRow = {
   warnings: string[];
 };
 
+export type AssistantRangePersonRow = {
+  id: string;
+  name: string;
+  secondary: string;
+  skills: string[];
+  minimumFree: number;
+  averageFree: number;
+  maximumFree: number;
+  workingDays: number;
+};
+
 export type AssistantDemandRow = {
   id: string;
   title: string;
@@ -284,6 +295,12 @@ export type AssistantDemandRow = {
 
 export type AssistantReadDetails =
   | { kind: "people"; onDate: string | null; rows: AssistantPersonRow[] }
+  | {
+      kind: "rangePeople";
+      startDate: string;
+      endDate: string;
+      rows: AssistantRangePersonRow[];
+    }
   | { kind: "demands"; rows: AssistantDemandRow[] }
   | {
       kind: "capacity";

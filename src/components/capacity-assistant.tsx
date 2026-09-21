@@ -100,6 +100,32 @@ function ReadCard({ details }: { details: AssistantReadDetails }) {
       </div>
     );
   }
+  if (details.kind === "rangePeople") {
+    return (
+      <div className="space-y-2">
+        {details.rows.map((row, index) => (
+          <div key={row.id} className="rounded-lg border bg-background p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">
+                  {index + 1}. {row.name}
+                </p>
+                <p className="text-xs text-muted-foreground">{row.secondary}</p>
+              </div>
+              <Badge variant="secondary">{row.minimumFree}% minimum free</Badge>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {row.averageFree}% average · {row.maximumFree}% maximum · {row.workingDays} working
+              {row.workingDays === 1 ? " day" : " days"}
+            </p>
+            {!!row.skills.length && (
+              <p className="mt-2 text-xs text-muted-foreground">{row.skills.join(" · ")}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (details.kind === "demands") {
     return (
       <div className="space-y-2">

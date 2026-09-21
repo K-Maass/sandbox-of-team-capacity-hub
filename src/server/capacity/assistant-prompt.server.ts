@@ -46,6 +46,7 @@ export type SafeSemanticPromptContext = {
   scope?: "consultant" | "team" | "demand";
   consultantLabel?: string;
   demandLabel?: string;
+  onDate?: string;
   range?: { startDate: string; endDate: string; label?: string };
   includePipeline?: boolean;
   focus?: z.infer<typeof safeFocusSchema>;
@@ -138,7 +139,10 @@ export function projectSafeSemanticContext(
   if (scope) output.scope = scope;
   if (consultant) output.consultantLabel = consultant;
   if (demand) output.demandLabel = demand;
-  if (range) output.range = range;
+  if (range) {
+    if (range.startDate === range.endDate) output.onDate = range.startDate;
+    else output.range = range;
+  }
   if (typeof context?.includePipeline === "boolean") {
     output.includePipeline = context.includePipeline;
   }
@@ -228,18 +232,21 @@ over a range, and getTeamOverviewRange for team capacity/availability over a
 range; use findSuitableDemands only when the user asks which demands fit a
 consultant.
 
-Choose read actions by the user's goal, not by a nearby word. Use getCapacity
-for one consultant at a point date and getCapacityRange for one consultant over
-a range. Use getTeamOverviewRange for a team capacity/availability picture over
-a range, and getTeamOverview only for a point-in-time team snapshot. Use
-findAvailabilityWindows only when the user explicitly asks for open windows
-with minimum capacity/working-day thresholds. Use findSuitableDemands only for
-which demands a named consultant could take on, and use
-findStaffingCandidatesRange only for which people could staff a named demand.
-“Who has room next week?” and “Who can we staff next week?” without a named
-demand are team-overview questions. A getConsultant action has no focus field;
-questions about a consultant's skills still use getConsultant with only the
-consultant reference. For every selected action, topic is only for productHelp,
+Choose read actions by the user's goal and requested answer shape, not by a
+nearby word. Questions asking WHO, WHICH PEOPLE, WHICH CONSULTANTS, WHO
+SPECIFICALLY, or NAMES request individual people: use listConsultants for a
+point date and listConsultantsRange for a bounded range, with
+capacityFilter=available when free capacity is requested. Questions asking HOW
+MUCH, TOTAL, TEAM UTILIZATION, or an overall staffing/capacity picture request
+aggregates: use getTeamOverview for a point date and getTeamOverviewRange for a
+range. Use getCapacity for one consultant at a point date and getCapacityRange
+for one consultant over a range. Use findAvailabilityWindows only when the user
+explicitly asks for open windows with minimum capacity/working-day thresholds.
+Use findSuitableDemands only for which demands a named consultant could take on,
+and use findStaffingCandidatesRange only for which people could staff a named
+demand. A getConsultant action has no focus field; questions about a
+consultant's skills still use getConsultant with only the consultant reference.
+For every selected action, topic is only for productHelp,
 focus must be one of that action's allowed values, and do not populate generic
 fields from another action kind.
 Provider field ownership is explicit: consultantStatus, consultantRole,
@@ -252,10 +259,14 @@ availability/candidate/suitable/help/skill-prefixed fields belong only to their
 named actions. Set every field outside the selected action's ownership to null.
 A request about a consultant's own free capacity, including “what can I take on
 next week?”, uses getCapacityRange; findSuitableDemands is only for explicitly
-asking which named demands fit that consultant. In a follow-up, preserve the
-current consultant context unless the user explicitly names a different person;
-do not turn a safe context label into a new name reference. A pipeline focus
-requires includePipeline=true.
+asking which named demands fit that consultant. In a follow-up, preserve the current consultant context unless the user
+explicitly names a different person; do not turn a safe context label into a new
+name reference. For team-capacity follow-ups such as “who specifically?”,
+“which people?”, or “names?”, preserve the current-context time and pipeline
+setting but switch from an aggregate team overview to listConsultants for point
+context or listConsultantsRange for range context, with capacityFilter=available.
+For “how much in total?” do the inverse and use the matching aggregate team
+overview. A pipeline focus requires includePipeline=true.
 Time fields follow the selected action: range actions put the time reference in
 range, point actions put it in onDate, and availability/demand list actions use
 their named range or activeOn field. For a bounded relative range use
@@ -284,6 +295,13 @@ Useful failure-boundary examples:
   with topic clarification, not a new write.
 - “Management skills” -> conversation_or_help/howToUse or product help; do not
   invent a consultant update.
+- “Who has capacity next Tuesday?” -> read/listConsultants with onDate as a
+  relative_weekday and capacityFilter=available.
+- “How much capacity does the team have next Tuesday?” -> read/getTeamOverview
+  at that point date.
+- “Who has room next week?” -> read/listConsultantsRange with the next-week
+  range and capacityFilter=available. “How much free capacity does the team
+  have next week?” -> read/getTeamOverviewRange for the same range.
 - “Show the team's capacity over the next two weeks.” -> read/team overview
   with week_range, startWeekOffset=1, durationWeeks=2, and a team-range focus
   such as free. Reserve overview/overallocated for point team-overview reads.

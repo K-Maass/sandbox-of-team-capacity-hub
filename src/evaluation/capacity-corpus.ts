@@ -150,6 +150,39 @@ const multipleChanges = (id: string, userMessage: string): CapacityEvalCase => (
 
 export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
   read(
+    "capacity-people-next-tuesday",
+    "Who has capacity next Tuesday?",
+    "list_consultants",
+    {
+      onDate: { kind: "relative_weekday", weekday: "tuesday", weekOffset: 0 },
+      capacityFilter: "available",
+    },
+    { tags: ["capacity", "people", "point"] },
+  ),
+  read(
+    "capacity-total-next-tuesday",
+    "How much capacity does the team have next Tuesday?",
+    "team_overview",
+    { onDate: { kind: "relative_weekday", weekday: "tuesday", weekOffset: 0 } },
+    { conversationId: "team-point-followup", conversationTurn: 1, tags: ["capacity", "team"] },
+  ),
+  read(
+    "capacity-team-who-specifically",
+    "Who specifically?",
+    "list_consultants",
+    { onDate: { reference: "context" }, capacityFilter: "available" },
+    {
+      safeConversationContext: {
+        scope: "team",
+        range: { startDate: "2026-09-22", endDate: "2026-09-22" },
+        focus: "free",
+      },
+      conversationId: "team-point-followup",
+      conversationTurn: 2,
+      tags: ["follow-up", "people"],
+    },
+  ),
+  read(
     "capacity-karim",
     "How much free capacity does Karim have today?",
     "capacity_point",
@@ -173,8 +206,8 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
   read(
     "capacity-team-alternate",
     "Which people are available in the coming fortnight?",
-    "team_overview_range",
-    { range: { timeConcept: "next_two_weeks" }, focus: "free" },
+    "list_consultants_range",
+    { range: { timeConcept: "next_two_weeks" }, capacityFilter: "available" },
     { tags: ["capacity", "team", "paraphrase-b"] },
   ),
   read(
@@ -267,8 +300,8 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
   read(
     "scope-next-week",
     "Who has room next week?",
-    "team_overview_range",
-    { range: { timeConcept: "next_week" }, focus: "free" },
+    "list_consultants_range",
+    { range: { timeConcept: "next_week" }, capacityFilter: "available" },
     { tags: ["scope", "paraphrase-a"] },
   ),
   read(
@@ -503,8 +536,8 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
   read(
     "paraphrase-team-2",
     "Who can we staff next week?",
-    "team_overview_range",
-    { range: { timeConcept: "next_week" }, focus: "free" },
+    "list_consultants_range",
+    { range: { timeConcept: "next_week" }, capacityFilter: "available" },
     { tags: ["paraphrase-b"] },
   ),
 ];
