@@ -19,17 +19,17 @@ describe("1000-case novice Capacity Assistant evaluation matrix", () => {
 
     expect(new Set(CAPACITY_NOVICE_EVAL_CORPUS.map((item) => item.id)).size).toBe(1000);
     expect(new Set(CAPACITY_NOVICE_EVAL_CORPUS.map((item) => item.userMessage)).size).toBeGreaterThanOrEqual(950);
-    expect(
-      new Set(
-        CAPACITY_NOVICE_EVAL_CORPUS.map((item) =>
-          JSON.stringify({
-            message: item.userMessage,
-            context: item.safeConversationContext ?? null,
-            pendingClarification: item.pendingClarification ?? null,
-          }),
-        ),
-      ).size,
-    ).toBe(1000);
+    const scenarios = new Map<string, string[]>();
+    for (const item of CAPACITY_NOVICE_EVAL_CORPUS) {
+      const key = JSON.stringify({
+        message: item.userMessage,
+        context: item.safeConversationContext ?? null,
+        pendingClarification: item.pendingClarification ?? null,
+      });
+      scenarios.set(key, [...(scenarios.get(key) ?? []), item.id]);
+    }
+    const duplicateScenarios = Array.from(scenarios.values()).filter((ids) => ids.length > 1);
+    expect(duplicateScenarios).toEqual([]);
 
     const categories = new Map<string, number>();
     for (const item of CAPACITY_NOVICE_EVAL_CORPUS)
