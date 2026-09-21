@@ -1,4 +1,5 @@
 import { CAPACITY_EVAL_CORPUS, type CapacityEvalCase } from "./capacity-corpus";
+import { CAPACITY_NOVICE_EVAL_CORPUS } from "./capacity-novice-corpus";
 import { createStateAwareProviderAdapter } from "./state-aware-provider-adapter";
 import {
   evaluateCorpus,
@@ -8,7 +9,11 @@ import {
 } from "./evaluator";
 
 const offline = process.argv.includes("--offline");
+const novice = process.argv.includes("--novice");
 const apiKeyConfigured = Boolean(process.env["IBM_SERVICES_API_KEY"]);
+const selectedCorpus: readonly CapacityEvalCase[] = novice
+  ? CAPACITY_NOVICE_EVAL_CORPUS
+  : CAPACITY_EVAL_CORPUS;
 
 function requiredCase(id: string): CapacityEvalCase {
   const item = CAPACITY_EVAL_CORPUS.find((candidate) => candidate.id === id);
@@ -80,7 +85,7 @@ if (!offline && !apiKeyConfigured) {
 } else {
   const stateAwareAdapter = createStateAwareProviderAdapter();
   const report = await evaluateCorpus(
-    CAPACITY_EVAL_CORPUS,
+    selectedCorpus,
     async (testCase: CapacityEvalCase, state: EvalConversationState): Promise<EvalActual> =>
       stateAwareAdapter({ testCase, state }),
   );
