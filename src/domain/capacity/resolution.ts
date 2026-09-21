@@ -50,7 +50,10 @@ export function resolveConsultant(
         );
   }
 
-  if (!matches.length) throw new CapacityActionFailure("NOT_FOUND", "Consultant not found");
+  if (!matches.length)
+    throw new CapacityActionFailure("NOT_FOUND", "Consultant not found", {
+      field: options.field,
+    });
   if (matches.length > 1) {
     throw new CapacityActionFailure("AMBIGUOUS_REFERENCE", "Consultant name is ambiguous", {
       candidates: matches.map(consultantCandidate),
@@ -84,7 +87,10 @@ export function resolveDemand(
       matches = matches.filter((demand) => normalize(demand.client) === client);
     }
   }
-  if (!matches.length) throw new CapacityActionFailure("NOT_FOUND", "Demand not found");
+  if (!matches.length)
+    throw new CapacityActionFailure("NOT_FOUND", "Demand not found", {
+      field: options.field,
+    });
   if (matches.length > 1) {
     throw new CapacityActionFailure("AMBIGUOUS_REFERENCE", "Demand title is ambiguous", {
       candidates: matches.map(demandCandidate),
@@ -114,7 +120,10 @@ export function resolveAvailabilityBlock(
         block.endDate === ref.endDate,
     );
   }
-  if (!matches.length) throw new CapacityActionFailure("NOT_FOUND", "Availability block not found");
+  if (!matches.length)
+    throw new CapacityActionFailure("NOT_FOUND", "Availability block not found", {
+      field: options.field,
+    });
   if (matches.length > 1) {
     throw new CapacityActionFailure("AMBIGUOUS_REFERENCE", "Availability block is ambiguous", {
       candidates: matches.map((block) => ({
