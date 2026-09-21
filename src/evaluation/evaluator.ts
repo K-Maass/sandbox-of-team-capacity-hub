@@ -316,6 +316,36 @@ function rangeForConcept(concept: string): { startDate: string; endDate: string 
   );
 }
 
+function addEvalDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function semanticRangeBounds(
+  value: Record<string, unknown> | undefined,
+): { startDate: string; endDate: string } | null {
+  if (!value) return null;
+  if (typeof value.startDate === "string" && typeof value.endDate === "string")
+    return { startDate: value.startDate, endDate: value.endDate };
+  if (value.kind === "week_offset" && typeof value.weeks === "number") {
+    const startDate = addEvalDays("2026-09-14", value.weeks * 7);
+    return { startDate, endDate: addEvalDays(startDate, 4) };
+  }
+  if (
+    value.kind === "week_range" &&
+    typeof value.startWeekOffset === "number" &&
+    typeof value.durationWeeks === "number"
+  ) {
+    const startDate = addEvalDays("2026-09-14", value.startWeekOffset * 7);
+    return {
+      startDate,
+      endDate: addEvalDays(startDate, (value.durationWeeks - 1) * 7 + 4),
+    };
+  }
+  return null;
+}
+
 function semanticEqual(
   expected: unknown,
   actual: unknown,
@@ -344,10 +374,19 @@ function semanticEqual(
     if (typeof value.timeConcept === "string") {
       if (actualRecord?.timeConcept === value.timeConcept) return true;
       const expectedRange = rangeForConcept(value.timeConcept);
+      const actualRange = semanticRangeBounds(actualRecord);
       if (
         expectedRange &&
-        actualRecord?.startDate === expectedRange.startDate &&
-        actualRecord.endDate === expectedRange.endDate
+        actualRange?.startDate === expectedRange.startDate &&
+        actualRange.endDate === expectedRange.endDate
+      )
+        return true;
+      const expectedDate = dateForConcept(value.timeConcept);
+      if (
+        expectedDate &&
+        (actual === expectedDate ||
+          actualRecord?.date === expectedDate ||
+          (actualRecord?.kind === "date" && actualRecord.date === expectedDate))
       )
         return true;
       if (value.timeConcept === "next_week")
@@ -390,7 +429,7 @@ function semanticEqual(
         return actualRecord?.kind === "days_from_today" && actualRecord.days === 2;
       if (value.timeConcept === "in_7_days")
         return actualRecord?.kind === "days_from_today" && actualRecord.days === 7;
-      return actual === dateForConcept(value.timeConcept);
+      return false;
     }
     if (typeof value.minimum === "number") {
       if (typeof actual === "number") return actual >= value.minimum;
