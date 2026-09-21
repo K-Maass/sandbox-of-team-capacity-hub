@@ -784,16 +784,40 @@ function errorResponse(
 }
 
 function domainMessageResponse(
-  error: { code: string; message: string },
+  error: { code: string; message: string; field?: string },
   currentDate: string,
   context?: ConversationContext,
 ): AssistantResponse | null {
   if (error.code !== "NOT_FOUND" && error.code !== "VALIDATION_ERROR") return null;
   const detail = error.message.trim().replace(/[.!?]+$/, "");
-  const message =
-    error.code === "NOT_FOUND"
-      ? `I couldn't complete that request: ${detail}. Check the consultant, demand, or current state and try again.`
-      : `That request needs a change before I can apply it: ${detail}.`;
+  let message: string;
+  if (error.code === "VALIDATION_ERROR") {
+    message = `That request needs a change before I can apply it: ${detail}.`;
+  } else if (/account is not linked|signed-in account/i.test(error.message)) {
+    message =
+      "Your signed-in account is not linked to an active consultant profile, so I can't make that change. No change was made.";
+  } else if (error.field === "block") {
+    message =
+      "I couldn't find that availability block in Capacity Hub. Check the dates and consultant, then try again. No change was made.";
+  } else if (
+    error.field === "demand" ||
+    error.field === "demand.owner" ||
+    error.field === "patch.owner"
+  ) {
+    message =
+      error.field === "demand"
+        ? "I couldn't find that demand in Capacity Hub. Check the demand name or create it first. No change was made."
+        : "I couldn't find that consultant in Capacity Hub. Check the consultant name or create the profile first. No change was made.";
+  } else if (
+    error.field === "consultant" ||
+    error.field === "owner" ||
+    error.field === "block.consultant"
+  ) {
+    message =
+      "I couldn't find that consultant in Capacity Hub. Check the consultant name or create the profile first. No change was made.";
+  } else {
+    message = `I couldn't complete that request: ${detail}. Check the current state and try again.`;
+  }
   return {
     ok: true,
     kind: "domain_message",

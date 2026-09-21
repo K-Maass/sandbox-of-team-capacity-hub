@@ -1208,7 +1208,7 @@ describe("Capacity assistant orchestration", () => {
       code: "NOT_FOUND",
     });
     expect(missing.ok && missing.kind === "domain_message" ? missing.message : "").toContain(
-      "Consultant not found",
+      "couldn't find that consultant",
     );
 
     repository.data.consultants[0].linkedToUser = true;
@@ -1243,6 +1243,71 @@ describe("Capacity assistant orchestration", () => {
       "Working capacity must remain between 0% and 100%",
     );
     expect(repository.applyCount).toBe(0);
+  });
+
+  test("V2 missing write references are identified precisely without preview or mutation", async () => {
+    const request = (outcome: unknown) =>
+      handleCapacityAssistant(
+        { mode: "interpret", message: "synthetic missing-reference write" },
+        repository,
+        ACTOR,
+        {
+          currentDate: "2026-09-15",
+          useV2Reads: true,
+          useV2Writes: true,
+          interpretV2: async () => semanticOutcomeSchema.parse(outcome),
+        },
+      );
+
+    const missingConsultant = await request({
+      type: "write",
+      action: {
+        kind: "setAllocation",
+        consultant: { kind: "name", name: "Nobody Missing" },
+        demand: { kind: "name", name: "Phoenix" },
+        capacity: 50,
+      },
+    });
+    expect(missingConsultant).toMatchObject({
+      ok: true,
+      kind: "domain_message",
+      code: "NOT_FOUND",
+    });
+    expect(
+      missingConsultant.ok && missingConsultant.kind === "domain_message"
+        ? missingConsultant.message
+        : "",
+    ).toContain("couldn't find that consultant");
+    expect(
+      missingConsultant.ok && missingConsultant.kind === "domain_message"
+        ? missingConsultant.message
+        : "",
+    ).toContain("No change was made");
+
+    const missingDemand = await request({
+      type: "write",
+      action: {
+        kind: "setAllocation",
+        consultant: { kind: "name", name: "Alex Meyer" },
+        demand: { kind: "name", name: "Missing Project" },
+        capacity: 50,
+      },
+    });
+    expect(missingDemand).toMatchObject({
+      ok: true,
+      kind: "domain_message",
+      code: "NOT_FOUND",
+    });
+    expect(
+      missingDemand.ok && missingDemand.kind === "domain_message" ? missingDemand.message : "",
+    ).toContain("couldn't find that demand");
+    expect(
+      missingDemand.ok && missingDemand.kind === "domain_message" ? missingDemand.message : "",
+    ).toContain("No change was made");
+
+    expect(repository.applyCount).toBe(0);
+    expect(JSON.stringify(missingConsultant)).not.toContain('"kind":"preview"');
+    expect(JSON.stringify(missingDemand)).not.toContain('"kind":"preview"');
   });
 
   test("V2 failures, writes, compound outcomes, and compile failures never call V1", async () => {
