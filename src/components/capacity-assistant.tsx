@@ -669,6 +669,7 @@ export function CapacityAssistantProvider({ children }: { children: ReactNode })
                               </Button>
                             </>
                           )}
+                          {result.kind === "domain_message" && <p>{result.message}</p>}
                           {result.kind === "conversation_or_help" && <p>{result.message}</p>}
                           {result.kind === "multiple_changes" && (
                             <>
