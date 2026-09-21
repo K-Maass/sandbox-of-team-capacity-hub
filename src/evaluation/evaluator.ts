@@ -171,6 +171,7 @@ function flattenImportant(value: unknown): Record<string, unknown> {
         "skill",
         "focus",
         "includePipeline",
+        "capacityFilter",
         "range",
         "startDate",
         "endDate",
