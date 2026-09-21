@@ -4,6 +4,7 @@ import type {
   AssistantDemandRow,
   AssistantPersonRow,
   AssistantPreview,
+  AssistantRangePersonRow,
   AssistantReadDetails,
   AssistantRequest,
   AssistantResponse,
@@ -111,6 +112,29 @@ function personRow(
   };
 }
 
+function rangePersonRow(
+  consultant: ConsultantDto,
+  range: {
+    aggregate: {
+      minimumFreeCapacity: number;
+      averageFreeCapacity: number;
+      maximumFreeCapacity: number;
+      workingDaysConsidered: number;
+    };
+  },
+): AssistantRangePersonRow {
+  return {
+    id: consultant.id,
+    name: fullName(consultant),
+    secondary: `${consultant.level} · ${consultant.role}`,
+    skills: consultant.skills,
+    minimumFree: range.aggregate.minimumFreeCapacity,
+    averageFree: range.aggregate.averageFreeCapacity,
+    maximumFree: range.aggregate.maximumFreeCapacity,
+    workingDays: range.aggregate.workingDaysConsidered,
+  };
+}
+
 function demandRow(demand: DemandDto, staffing: StaffingSnapshot): AssistantDemandRow {
   return {
     id: demand.id,
@@ -178,6 +202,54 @@ function readPresentation(
           kind: "people",
           onDate,
           rows: rows.map((row) => personRow(row.consultant, row.capacity)),
+        },
+      };
+    }
+    case "listConsultantsRange": {
+      const data = result as {
+        range: { startDate: string; endDate: string };
+        consultants: Array<{
+          consultant: ConsultantDto;
+          range: {
+            aggregate: {
+              minimumFreeCapacity: number;
+              averageFreeCapacity: number;
+              maximumFreeCapacity: number;
+              workingDaysConsidered: number;
+              isAlwaysAvailable: boolean;
+            };
+          };
+        }>;
+        count: number;
+      };
+      let rows = data.consultants;
+      if (intent.presentation === "available_consultants") {
+        rows = rows
+          .filter(
+            (row) =>
+              row.range.aggregate.isAlwaysAvailable &&
+              row.range.aggregate.minimumFreeCapacity > 0,
+          )
+          .sort(
+            (a, b) =>
+              b.range.aggregate.minimumFreeCapacity - a.range.aggregate.minimumFreeCapacity ||
+              b.range.aggregate.averageFreeCapacity - a.range.aggregate.averageFreeCapacity ||
+              fullName(a.consultant).localeCompare(fullName(b.consultant)),
+          );
+      }
+      const message =
+        intent.presentation === "available_consultants"
+          ? rows.length
+            ? `${rows.length} ${plural(rows.length, "person", "people")} ${plural(rows.length, "has", "have")} capacity throughout ${data.range.startDate} to ${data.range.endDate}.`
+            : `No active consultants have capacity throughout ${data.range.startDate} to ${data.range.endDate}.`
+          : `Found ${rows.length} ${plural(rows.length, "consultant")} across the requested range.`;
+      return {
+        message,
+        details: {
+          kind: "rangePeople",
+          startDate: data.range.startDate,
+          endDate: data.range.endDate,
+          rows: rows.map((row) => rangePersonRow(row.consultant, row.range)),
         },
       };
     }
@@ -833,6 +905,7 @@ function buildConversationContext(
       case "getTeamOverview":
       case "getTeamOverviewRange":
       case "listConsultants":
+      case "listConsultantsRange":
       case "skillSupplyDemand":
         enterScope("team");
         break;
@@ -876,6 +949,11 @@ function buildConversationContext(
       } else {
         context.lastFocus = focus;
       }
+    } else if (
+      action.kind === "listConsultants" ||
+      action.kind === "listConsultantsRange"
+    ) {
+      if (intent.presentation === "available_consultants") context.lastFocus = "free";
     } else if (action.kind === "getConsultant") {
       context.lastFocus = "allocations";
     } else if (action.kind.includes("Staffing")) {

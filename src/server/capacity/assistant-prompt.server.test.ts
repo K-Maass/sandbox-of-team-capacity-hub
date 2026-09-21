@@ -84,10 +84,11 @@ describe("Luna V2 provider prompt", () => {
     expect(prompt).toContain("multiple_changes");
     expect(prompt).toContain("surname is");
     expect(prompt).toContain("Who has room next week?");
+    expect(prompt).toContain("listConsultantsRange");
+    expect(prompt).toContain("who specifically?");
     expect(prompt).toContain("getConsultant action has no focus field");
-    expect(prompt).toContain(
-      "findStaffingCandidatesRange only for which people could staff a named demand",
-    );
+    expect(prompt).toContain("findStaffingCandidatesRange only for which people could staff a named");
+    expect(prompt).toContain("demand. A getConsultant action has no focus field");
     expect(prompt).not.toContain("phrase-parser");
     expect(prompt).not.toContain("00000000-0000-4000-8000-000000000001");
   });
@@ -116,4 +117,20 @@ describe("Luna V2 provider prompt", () => {
     expect(prompt).not.toContain("Alex Smith");
     expect(prompt).toContain("API Key Migration");
   });
+  test("projects one-day conversation time as a point instead of a range", () => {
+    expect(
+      projectSafeSemanticContext({
+        context: {
+          scope: "team",
+          lastRange: { startDate: "2026-09-29", endDate: "2026-09-29" },
+          lastFocus: "free",
+        },
+      }),
+    ).toEqual({
+      scope: "team",
+      onDate: "2026-09-29",
+      focus: "free",
+    });
+  });
+
 });

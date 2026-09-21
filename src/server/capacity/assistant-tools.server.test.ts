@@ -137,6 +137,7 @@ describe("Luna V2 semantic tool", () => {
     for (const toolName of Object.values(toolNameByType)) expect(serialized).toContain(toolName);
     for (const action of [
       "getCapacityRange",
+      "listConsultantsRange",
       "getTeamOverviewRange",
       "createDemand",
       "updateConsultant",
@@ -195,6 +196,7 @@ describe("Luna V2 semantic tool", () => {
 
     const reads = [
       { kind: "listConsultants" },
+      { kind: "listConsultantsRange", range, capacityFilter: "available" },
       { kind: "getConsultant", consultant: self },
       { kind: "listDemands" },
       { kind: "getDemand", demand: phoenix },

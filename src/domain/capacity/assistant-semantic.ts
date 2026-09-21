@@ -212,6 +212,19 @@ const listConsultantsSemanticReadSchema = z
     path: ["onDate"],
   });
 
+const listConsultantsRangeSemanticReadSchema = z
+  .object({
+    kind: z.literal("listConsultantsRange"),
+    status: z.enum(["active", "archived", "all"]).default("active"),
+    role: roleSchema.optional(),
+    level: levelSchema.optional(),
+    skills: skillsFilterSchema.optional(),
+    range: semanticRangeRefSchema,
+    includePipeline: includePipelineSchema,
+    capacityFilter: z.enum(["any", "available"]).default("any"),
+  })
+  .strict();
+
 const getConsultantSemanticReadSchema = z
   .object({
     kind: z.literal("getConsultant"),
@@ -354,6 +367,7 @@ const getTeamOverviewSemanticReadSchema = z
 /** Closed semantic read family; every member has a deterministic Phase 2 target. */
 export const semanticReadActionSchema = z.union([
   listConsultantsSemanticReadSchema,
+  listConsultantsRangeSemanticReadSchema,
   getConsultantSemanticReadSchema,
   listDemandsSemanticReadSchema,
   getDemandSemanticReadSchema,
@@ -582,6 +596,7 @@ export const semanticRelativeWriteSchema = z
 
 export const semanticIntentFamilySchema = z.enum([
   "list_consultants",
+  "list_consultants_range",
   "consultant_details",
   "list_demands",
   "demand_details",
@@ -717,7 +732,37 @@ export const semanticReadOutcomeSchema = z
     action: semanticReadActionSchema,
     presentation: semanticPresentationSchema.default("default"),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.presentation === "available_consultants" &&
+      value.action.kind !== "listConsultants" &&
+      value.action.kind !== "listConsultantsRange"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "available_consultants presentation requires a consultant-list action",
+        path: ["presentation"],
+      });
+    }
+    if (value.presentation === "staffing_gap" && value.action.kind !== "getDemand") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "staffing_gap presentation requires getDemand",
+        path: ["presentation"],
+      });
+    }
+    if (
+      value.presentation === "overallocated_consultants" &&
+      value.action.kind !== "getTeamOverview"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "overallocated_consultants presentation requires getTeamOverview",
+        path: ["presentation"],
+      });
+    }
+  });
 
 /** The complete model-facing semantic result. Non-action outcomes contain no executable action. */
 export const semanticOutcomeSchema = z.union([

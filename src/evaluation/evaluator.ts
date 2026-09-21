@@ -107,6 +107,7 @@ function semanticFamily(kind: string): string {
         getConsultant: "consultant_details",
         getDemand: "demand_details",
         listConsultants: "list_consultants",
+        listConsultantsRange: "list_consultants_range",
         listDemands: "list_demands",
         findAvailabilityWindows: "availability_windows",
         findStaffingCandidatesRange: "staffing_candidates_range",
@@ -170,6 +171,7 @@ function flattenImportant(value: unknown): Record<string, unknown> {
         "skill",
         "focus",
         "includePipeline",
+        "capacityFilter",
         "range",
         "startDate",
         "endDate",
@@ -208,7 +210,12 @@ function classifyIntent(intent: unknown, state?: EvalConversationState): Semanti
     };
   if (value.type === "read") {
     const importantArguments = flattenImportant(action);
-    if (action?.kind === "getTeamOverview" || action?.kind === "getTeamOverviewRange")
+    if (
+      action?.kind === "getTeamOverview" ||
+      action?.kind === "getTeamOverviewRange" ||
+      action?.kind === "listConsultants" ||
+      action?.kind === "listConsultantsRange"
+    )
       importantArguments.scope = "team";
     else if (
       action?.kind === "getCapacity" ||

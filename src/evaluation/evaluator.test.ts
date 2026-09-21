@@ -65,7 +65,12 @@ describe("Stage 1 Capacity Hub evaluation corpus", () => {
   });
 
   test("matches semantic expected outcomes and arguments", async () => {
-    const report = await evaluateCorpus(CAPACITY_EVAL_CORPUS.slice(0, 2), (item) => ({
+    const cases = ["capacity-karim", "capacity-self"].map((id) => {
+      const found = CAPACITY_EVAL_CORPUS.find((item) => item.id === id);
+      if (!found) throw new Error(`Missing evaluation case: ${id}`);
+      return found;
+    });
+    const report = await evaluateCorpus(cases, (item) => ({
       intent:
         item.id === "capacity-karim"
           ? { type: "read", action: { kind: "capacity_point", consultant: "Karim", focus: "free" } }

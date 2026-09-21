@@ -97,6 +97,40 @@ export function executeReadAction(
       };
     }
 
+    case "listConsultantsRange": {
+      let consultants = data.consultants.filter((consultant) => {
+        if (action.status === "active" && consultant.archivedAt) return false;
+        if (action.status === "archived" && !consultant.archivedAt) return false;
+        if (action.role && consultant.role !== action.role) return false;
+        if (action.level && consultant.level !== action.level) return false;
+        if (action.skills?.anyOf?.length) {
+          if (!action.skills.anyOf.some((skill) => hasSkill(consultant.skills, skill)))
+            return false;
+        }
+        if (action.skills?.allOf?.length) {
+          if (!action.skills.allOf.every((skill) => hasSkill(consultant.skills, skill)))
+            return false;
+        }
+        return true;
+      });
+      consultants = sortConsultants(consultants);
+      const range = { startDate: action.startDate, endDate: action.endDate };
+      return {
+        range,
+        consultants: consultants.map((consultant) => ({
+          consultant,
+          range: getCapacityRange(
+            data,
+            consultant,
+            range,
+            action.includePipeline ?? false,
+            bounds,
+          ),
+        })),
+        count: consultants.length,
+      };
+    }
+
     case "getConsultant": {
       const consultant = resolveConsultant(action.consultant, data.consultants, {
         field: "consultant",

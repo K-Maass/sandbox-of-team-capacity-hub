@@ -143,6 +143,17 @@ export type ListConsultantsAction = {
   includePipeline?: boolean;
 };
 
+export type ListConsultantsRangeAction = {
+  kind: "listConsultantsRange";
+  status?: "active" | "archived" | "all";
+  role?: Role;
+  level?: Level;
+  skills?: { anyOf?: string[]; allOf?: string[] };
+  startDate: ISODate;
+  endDate: ISODate;
+  includePipeline?: boolean;
+};
+
 export type GetConsultantAction = {
   kind: "getConsultant";
   consultant: ConsultantRef;
@@ -272,6 +283,7 @@ export type ReadAction =
   | GetTeamOverviewRangeAction
   | GetTeamOverviewAction
   | ListConsultantsAction
+  | ListConsultantsRangeAction
   | ListDemandsAction
   | SkillSupplyDemandAction
   | ProductHelpAction;

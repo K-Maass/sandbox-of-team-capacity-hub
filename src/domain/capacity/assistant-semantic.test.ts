@@ -79,6 +79,12 @@ describe("Luna semantic contracts", () => {
         onDate: TODAY,
         capacityFilter: "available",
       },
+      {
+        kind: "listConsultantsRange",
+        skills: { anyOf: ["AI"] },
+        range: RANGE,
+        capacityFilter: "available",
+      },
       { kind: "getConsultant", consultant: SELF, onDate: TODAY },
       { kind: "listDemands", statuses: ["Incoming"], owner: SELF },
       { kind: "getDemand", demand: CONTEXT_DEMAND, onDate: TODAY, focus: "staffing_gap" },
@@ -104,7 +110,7 @@ describe("Luna semantic contracts", () => {
     ] as const;
 
     for (const read of reads) expect(semanticReadActionSchema.safeParse(read).success).toBe(true);
-    expect(new Set(reads.map((read) => read.kind)).size).toBe(14);
+    expect(new Set(reads.map((read) => read.kind)).size).toBe(15);
   });
 
   test("accepts preview-only writes and all relative write operations", () => {
@@ -393,4 +399,28 @@ describe("Luna semantic contracts", () => {
         .success,
     ).toBe(false);
   });
+  test("rejects presentations that do not match their read action", () => {
+    expect(
+      semanticOutcomeSchema.safeParse({
+        type: "read",
+        action: { kind: "getTeamOverview", onDate: TODAY },
+        presentation: "available_consultants",
+      }).success,
+    ).toBe(false);
+    expect(
+      semanticOutcomeSchema.safeParse({
+        type: "read",
+        action: { kind: "listConsultants", onDate: TODAY },
+        presentation: "staffing_gap",
+      }).success,
+    ).toBe(false);
+    expect(
+      semanticOutcomeSchema.safeParse({
+        type: "read",
+        action: { kind: "listConsultantsRange", range: RANGE, capacityFilter: "available" },
+        presentation: "available_consultants",
+      }).success,
+    ).toBe(true);
+  });
+
 });

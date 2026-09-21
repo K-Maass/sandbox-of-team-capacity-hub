@@ -4,6 +4,9 @@ on:
     branches:
       - main
       - verify/final-v2
+  pull_request:
+    branches:
+      - main
 permissions:
   contents: read
 jobs:
@@ -16,6 +19,8 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install
+      - name: Test
+        run: bun test
       - name: Typecheck
         run: bunx tsc --noEmit
       - name: Production build
