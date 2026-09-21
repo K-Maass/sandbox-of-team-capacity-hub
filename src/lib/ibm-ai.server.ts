@@ -52,6 +52,16 @@ export class IbmAiRequestError extends Error {
   }
 }
 
+function getIbmServicesApiKey(): string | undefined {
+  const raw = process.env["IBM_SERVICES_API_KEY"];
+  if (!raw) return undefined;
+
+  // Vercel env values are sometimes pasted with surrounding typographic/ASCII quotes.
+  // Strip only boundary quote characters and whitespace; never alter the token body.
+  const cleaned = raw.trim().replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, "");
+  return cleaned || undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -77,7 +87,7 @@ function extractOutputText(payload: unknown): string | null {
 }
 
 export async function runIbmAiSmoke(): Promise<typeof EXPECTED_OUTPUT> {
-  const apiKey = process.env["IBM_SERVICES_API_KEY"];
+  const apiKey = getIbmServicesApiKey();
   if (!apiKey) throw new IbmAiSmokeError("not_configured");
 
   let response: Response;
@@ -279,7 +289,7 @@ export async function runIbmFunctionCall(options: {
   signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<IbmFunctionCall> {
-  const apiKey = process.env["IBM_SERVICES_API_KEY"];
+  const apiKey = getIbmServicesApiKey();
   if (!apiKey) throw new IbmAiRequestError("not_configured");
 
   const controller = new AbortController();
