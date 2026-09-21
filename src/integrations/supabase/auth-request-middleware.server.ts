@@ -1,6 +1,6 @@
 import { createMiddleware } from "@tanstack/react-start";
 
-import { supabaseAdmin } from "./client.server";
+import { SupabaseAuthInvalidTokenError, bearerToken, verifySupabaseToken } from "./auth.server";
 
 function jsonError(error: "auth_unavailable" | "unauthorized", status: number): Response {
   return Response.json(
@@ -13,28 +13,25 @@ function jsonError(error: "auth_unavailable" | "unauthorized", status: number): 
 }
 
 /**
- * Validates a Supabase access token for a server route.
- *
- * The bearer token and service-role client remain inside this adapter. Downstream
- * handlers receive only the authenticated user's ID.
+ * Validates a Supabase access token for a server route with the publishable key.
+ * Downstream handlers receive only the authenticated user's ID.
  */
 export const requireSupabaseToken = createMiddleware().server(async ({ request, next }) => {
-  const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return jsonError("unauthorized", 401);
-
-  const token = authHeader.slice("Bearer ".length).trim();
-  if (!token || token.split(".").length !== 3) return jsonError("unauthorized", 401);
+  const token = bearerToken(request);
+  if (!token) return jsonError("unauthorized", 401);
 
   try {
-    const { data, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !data.user) return jsonError("unauthorized", 401);
+    const { userId } = await verifySupabaseToken(token);
 
     return next({
       context: {
-        userId: data.user.id,
+        userId,
       },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof SupabaseAuthInvalidTokenError) {
+      return jsonError("unauthorized", 401);
+    }
     return jsonError("auth_unavailable", 503);
   }
 });

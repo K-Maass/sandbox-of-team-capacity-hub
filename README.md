@@ -5,7 +5,7 @@ A shared staffing and capacity-planning application for a consulting team, with 
 ## What it does
 
 - Shared consultant roster backed by Postgres/Supabase.
-- Email/password sign-up and sign-in.
+- Email/password sign-in for invited or pre-created team accounts.
 - First-login **Join the team** flow so colleagues add themselves before using the staffing board, or claim an existing roster entry with the same email.
 - Consultant fields: name, email, level, role, skills/topics and working capacity.
 - Simple **unavailable dates** for vacation, training or other full days when someone should not be staffable.
@@ -77,7 +77,7 @@ This version intentionally keeps permissions minimal:
 - any authenticated user can view and edit the shared roster, unavailable dates, demands and allocations;
 - there is no admin/invite hierarchy yet.
 
-That is appropriate for a small trusted team. If this becomes a larger or sensitive production system, add organization membership and role-based policies before storing sensitive staffing/client data.
+That is appropriate for a small trusted team only when Supabase public signup is disabled and accounts are invited or pre-created. If this becomes a larger or sensitive production system, add organization membership and role-based policies before storing sensitive staffing/client data.
 
 ## Data model
 
@@ -173,7 +173,7 @@ drizzle/migrations/0001_usability_and_realtime.sql
 drizzle/migrations/0002_planning_extensions.sql
 ```
 
-The migrations add demand skills, Realtime publication, unavailable dates, archived consultants and demand ownership.
+The migrations add demand skills, Realtime publication, unavailable dates, archived consultants, demand ownership and the production privilege hardening. In the production project, disable Supabase Auth public signup before enabling the application for general users.
 
 Then place that project's public URL and publishable key in `.env`.
 
@@ -181,15 +181,14 @@ Do **not** put a Supabase service-role/secret key into frontend environment vari
 
 ## Sharing with the team
 
-For the existing hosted project, share the deployed app URL. A colleague can:
+For the existing hosted project, share the deployed app URL. A colleague with an invited or pre-created account can:
 
-1. create an account;
-2. confirm their email if the Supabase project requires confirmation;
-3. after sign-in they are sent directly to **Join the team**;
-4. add themselves to the roster, or claim a pre-created team profile with the same email;
-5. add unavailable dates when relevant;
-6. use Board for day-to-day staffing and Timeline for forward planning;
-7. see shared changes update automatically.
+1. sign in;
+2. after sign-in they are sent directly to **Join the team**;
+3. add themselves to the roster, or claim a pre-created team profile with the same email;
+4. add unavailable dates when relevant;
+5. use Board for day-to-day staffing and Timeline for forward planning;
+6. see shared changes update automatically.
 
 For source-code handoff, share the repository or a source ZIP from Lovable/GitHub. The deployed app intentionally does not expose a source-download endpoint.
 
