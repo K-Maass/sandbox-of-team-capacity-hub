@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type {
+  ActionErrorCode,
   ActionImpact,
   ActionWarning,
   FieldChange,
@@ -413,6 +414,11 @@ export type AssistantSuccess = {
   labels: Record<string, string>;
 };
 
+export type AssistantDomainMessageCode = Extract<
+  ActionErrorCode,
+  "NOT_FOUND" | "VALIDATION_ERROR"
+>;
+
 export type AssistantResponse =
   | (PendingClarificationResponse & {
       ok: true;
@@ -445,6 +451,14 @@ export type AssistantResponse =
   | (PendingClarificationResponse & {
       ok: true;
       kind: "semantic_clarification";
+      message: string;
+      currentDate: string;
+      context?: ConversationContext;
+    })
+  | (PendingClarificationResponse & {
+      ok: true;
+      kind: "domain_message";
+      code: AssistantDomainMessageCode;
       message: string;
       currentDate: string;
       context?: ConversationContext;
