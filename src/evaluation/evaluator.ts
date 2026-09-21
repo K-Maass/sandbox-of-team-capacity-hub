@@ -172,6 +172,16 @@ function flattenImportant(value: unknown): Record<string, unknown> {
         "focus",
         "includePipeline",
         "capacityFilter",
+        "statuses",
+        "types",
+        "owner",
+        "activeOn",
+        "minimumFreeCapacity",
+        "minimumWorkingDays",
+        "minimumSkillMatches",
+        "limit",
+        "workingCapacity",
+        "archived",
         "range",
         "startDate",
         "endDate",
@@ -184,7 +194,11 @@ function flattenImportant(value: unknown): Record<string, unknown> {
     ) {
       output[key] = key === "consultant" || key === "demand" ? normalizeReference(item) : item;
     }
-    if ((key === "demand" || key === "consultant") && item && typeof item === "object")
+    if (
+      ["demand", "consultant", "patch", "block"].includes(key) &&
+      item &&
+      typeof item === "object"
+    )
       Object.assign(output, flattenImportant(item));
   }
   return output;
@@ -270,10 +284,17 @@ function classifyIntent(intent: unknown, state?: EvalConversationState): Semanti
 function dateForConcept(concept: string): string | null {
   return (
     (
-      { today: "2026-09-15", next_monday: "2026-09-21", next_month: "2026-10-01" } as Record<
-        string,
-        string
-      >
+      {
+        today: "2026-09-15",
+        tomorrow: "2026-09-16",
+        in_2_days: "2026-09-17",
+        next_monday: "2026-09-21",
+        next_tuesday: "2026-09-22",
+        next_friday: "2026-09-25",
+        in_7_days: "2026-09-22",
+        sep_30: "2026-09-30",
+        next_month: "2026-10-01",
+      } as Record<string, string>
     )[concept] ?? null
   );
 }
@@ -282,9 +303,14 @@ function rangeForConcept(concept: string): { startDate: string; endDate: string 
   return (
     (
       {
+        this_week: { startDate: "2026-09-14", endDate: "2026-09-18" },
         next_week: { startDate: "2026-09-21", endDate: "2026-09-25" },
         next_two_weeks: { startDate: "2026-09-21", endDate: "2026-10-02" },
+        week_after_next: { startDate: "2026-09-28", endDate: "2026-10-02" },
+        next_three_weeks: { startDate: "2026-09-21", endDate: "2026-10-09" },
         next_month: { startDate: "2026-10-01", endDate: "2026-10-31" },
+        october: { startDate: "2026-10-01", endDate: "2026-10-31" },
+        end_sep: { startDate: "2026-09-28", endDate: "2026-09-30" },
       } as Record<string, { startDate: string; endDate: string }>
     )[concept] ?? null
   );
@@ -344,8 +370,26 @@ function semanticEqual(
         return (
           actualRecord?.kind === "relative_weekday" &&
           actualRecord.weekday === "monday" &&
-          actualRecord.weekOffset === 1
+          (actualRecord.weekOffset === 0 || actualRecord.weekOffset === 1)
         );
+      if (value.timeConcept === "next_tuesday")
+        return (
+          actualRecord?.kind === "relative_weekday" &&
+          actualRecord.weekday === "tuesday" &&
+          (actualRecord.weekOffset === 0 || actualRecord.weekOffset === 1)
+        );
+      if (value.timeConcept === "next_friday")
+        return (
+          actualRecord?.kind === "relative_weekday" &&
+          actualRecord.weekday === "friday" &&
+          (actualRecord.weekOffset === 0 || actualRecord.weekOffset === 1)
+        );
+      if (value.timeConcept === "tomorrow")
+        return actualRecord?.kind === "days_from_today" && actualRecord.days === 1;
+      if (value.timeConcept === "in_2_days")
+        return actualRecord?.kind === "days_from_today" && actualRecord.days === 2;
+      if (value.timeConcept === "in_7_days")
+        return actualRecord?.kind === "days_from_today" && actualRecord.days === 7;
       return actual === dateForConcept(value.timeConcept);
     }
     if (typeof value.minimum === "number") {
