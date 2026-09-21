@@ -251,7 +251,7 @@ focus must be one of that action's allowed values, and do not populate generic
 fields from another action kind.
 Provider field ownership is explicit: consultantStatus, consultantRole,
 consultantLevel, consultantSkills*, and consultantCapacityFilter belong only to
-listConsultants; demandStatuses, demandTypes, demandOwner, and demandSkills
+listConsultants or listConsultantsRange; demandStatuses, demandTypes, demandOwner, and demandSkills
 belong only to listDemands; capacityFocus belongs only to capacity reads;
 demandFocus only to getDemand; teamFocus/teamRole/teamLevel only to
 getTeamOverviewRange; overviewFocus only to getTeamOverview; and the
