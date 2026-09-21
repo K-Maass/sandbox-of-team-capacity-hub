@@ -200,6 +200,35 @@ function embeddedProviderErrorCode(value: unknown): string | undefined {
   return match?.[1];
 }
 
+function networkErrorDiagnostics(error: unknown): IbmAiRequestDiagnostics {
+  const parts: string[] = [];
+  let providerErrorCode: string | undefined;
+
+  if (error instanceof Error) {
+    const message = sanitizeProviderDiagnosticText(`${error.name}: ${error.message}`);
+    if (message) parts.push(message);
+
+    const cause = (error as Error & { cause?: unknown }).cause;
+    if (isRecord(cause)) {
+      providerErrorCode = sanitizeProviderErrorCode(cause["code"]);
+      const causeMessage = sanitizeProviderDiagnosticText(cause["message"]);
+      if (causeMessage) parts.push(`cause=${causeMessage}`);
+    } else if (cause instanceof Error) {
+      const causeMessage = sanitizeProviderDiagnosticText(`${cause.name}: ${cause.message}`);
+      if (causeMessage) parts.push(`cause=${causeMessage}`);
+    }
+  } else {
+    const detail = sanitizeProviderDiagnosticText(String(error));
+    if (detail) parts.push(detail);
+  }
+
+  return {
+    providerErrorCode,
+    providerErrorDetail: parts.length ? parts.join("; ") : "Fetch failed before an HTTP response was received.",
+  };
+}
+
+
 function providerErrorDiagnostics(httpStatus: number, body: string): IbmAiRequestDiagnostics {
   let parsed: unknown;
   try {
@@ -290,11 +319,11 @@ export async function runIbmFunctionCall(options: {
       }),
       signal: controller.signal,
     });
-  } catch {
+  } catch (error) {
     cleanup();
     if (controller.signal.reason === "cancelled") throw new IbmAiRequestError("cancelled");
     if (controller.signal.reason === "timeout") throw new IbmAiRequestError("timeout");
-    throw new IbmAiRequestError("provider_unavailable");
+    throw new IbmAiRequestError("provider_unavailable", networkErrorDiagnostics(error));
   }
   try {
     if (!response.ok) {
