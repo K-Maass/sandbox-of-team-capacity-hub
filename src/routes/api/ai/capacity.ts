@@ -138,6 +138,11 @@ export const Route = createFileRoute("/api/ai/capacity")({
         } catch (error) {
           const { IbmAiRequestError } = await import("@/lib/ibm-ai.server");
           if (error instanceof CapacityV2InterpreterError) {
+            console.error("[Capacity AI] V2 provider failure", {
+              code: error.code,
+              providerCode: error.providerCode,
+              providerDiagnostics: error.providerDiagnostics,
+            });
             const mapped =
               error.providerCode === "cancelled"
                 ? (["REQUEST_CANCELLED", "Request was cancelled."] as const)
@@ -163,6 +168,10 @@ export const Route = createFileRoute("/api/ai/capacity")({
             );
           }
           if (error instanceof IbmAiRequestError) {
+            console.error("[Capacity AI] IBM provider failure", {
+              code: error.code,
+              diagnostics: error.diagnostics,
+            });
             const mapped = {
               cancelled: ["REQUEST_CANCELLED", "Request was cancelled."],
               invalid_request: ["AI_INVALID_RESPONSE", "The AI response could not be validated."],
