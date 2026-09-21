@@ -87,9 +87,8 @@ describe("Luna V2 provider prompt", () => {
     expect(prompt).toContain("listConsultantsRange");
     expect(prompt).toContain("who specifically?");
     expect(prompt).toContain("getConsultant action has no focus field");
-    expect(prompt).toContain(
-      "findStaffingCandidatesRange only for which people could staff a named demand",
-    );
+    expect(prompt).toContain("findStaffingCandidatesRange only for which people could staff a named");
+    expect(prompt).toContain("demand. A getConsultant action has no focus field");
     expect(prompt).not.toContain("phrase-parser");
     expect(prompt).not.toContain("00000000-0000-4000-8000-000000000001");
   });
