@@ -154,7 +154,7 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     "Who has capacity next Tuesday?",
     "list_consultants",
     {
-      onDate: { kind: "relative_weekday", weekday: "tuesday", weekOffset: 0 },
+      onDate: { kind: "relative_weekday", weekday: "tuesday", weekOffset: 1 },
       capacityFilter: "available",
     },
     { tags: ["capacity", "people", "point"] },
@@ -163,7 +163,7 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     "capacity-total-next-tuesday",
     "How much capacity does the team have next Tuesday?",
     "team_overview",
-    { onDate: { kind: "relative_weekday", weekday: "tuesday", weekOffset: 0 } },
+    { onDate: { kind: "relative_weekday", weekday: "tuesday", weekOffset: 1 } },
     { conversationId: "team-point-followup", conversationTurn: 1, tags: ["capacity", "team"] },
   ),
   read(
@@ -174,7 +174,7 @@ export const CAPACITY_EVAL_CORPUS: readonly CapacityEvalCase[] = [
     {
       safeConversationContext: {
         scope: "team",
-        range: { startDate: "2026-09-22", endDate: "2026-09-22" },
+        range: { startDate: "2026-09-29", endDate: "2026-09-29" },
         focus: "free",
       },
       conversationId: "team-point-followup",
