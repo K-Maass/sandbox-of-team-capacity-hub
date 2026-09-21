@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type { ConversationContext } from "@/domain/capacity/assistant";
 import type { PendingClarification } from "@/domain/capacity/assistant-clarification";
 import { semanticOutcomeSchema, type SemanticOutcome } from "@/domain/capacity/assistant-semantic";
@@ -49,22 +51,77 @@ export type CapacityV2InterpreterErrorCode =
   | "CAPACITY_V2_UNKNOWN_TOOL_CALL"
   | "CAPACITY_V2_INVALID_SEMANTIC_OUTCOME";
 
+export type CapacityV2SemanticDiagnostics = {
+  toolName: string;
+  actionKind?: string;
+  parserError?: "UNKNOWN_SEMANTIC_TOOL" | "INVALID_SEMANTIC_TOOL_ARGUMENTS" | "ZOD_VALIDATION";
+  issues?: Array<{ path: string; code: string }>;
+};
+
+function safeSemanticIdentifier(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function semanticDiagnostics(call: IbmFunctionCall, error: unknown): CapacityV2SemanticDiagnostics {
+  let actionKind: string | undefined;
+  try {
+    const parsed = JSON.parse(call.arguments) as unknown;
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      const action = (parsed as Record<string, unknown>).action;
+      if (typeof action === "object" && action !== null && !Array.isArray(action)) {
+        actionKind = safeSemanticIdentifier((action as Record<string, unknown>).kind);
+      }
+    }
+  } catch {
+    // The parser category below is enough; never retain raw provider arguments.
+  }
+
+  const parserError =
+    error instanceof z.ZodError
+      ? "ZOD_VALIDATION"
+      : error instanceof Error &&
+          (error.message === "UNKNOWN_SEMANTIC_TOOL" ||
+            error.message === "INVALID_SEMANTIC_TOOL_ARGUMENTS")
+        ? error.message
+        : undefined;
+
+  const issues =
+    error instanceof z.ZodError
+      ? error.issues.slice(0, 8).map((issue) => ({
+          path: issue.path.map(String).join(".").slice(0, 160),
+          code: issue.code,
+        }))
+      : undefined;
+
+  return {
+    toolName: safeSemanticIdentifier(call.name) ?? "invalid_tool_name",
+    ...(actionKind ? { actionKind } : {}),
+    ...(parserError ? { parserError } : {}),
+    ...(issues?.length ? { issues } : {}),
+  };
+}
+
 /** Errors at the V2 provider boundary are explicit and never trigger V1 fallback. */
 export class CapacityV2InterpreterError extends Error {
   readonly code: CapacityV2InterpreterErrorCode;
   readonly providerCode?: import("@/lib/ibm-ai.server").IbmAiRequestErrorCode;
   readonly providerDiagnostics?: import("@/lib/ibm-ai.server").IbmAiRequestDiagnostics;
+  readonly semanticDiagnostics?: CapacityV2SemanticDiagnostics;
 
   constructor(
     code: CapacityV2InterpreterErrorCode,
     providerCode?: import("@/lib/ibm-ai.server").IbmAiRequestErrorCode,
     providerDiagnostics?: import("@/lib/ibm-ai.server").IbmAiRequestDiagnostics,
+    semanticDiagnosticsValue?: CapacityV2SemanticDiagnostics,
   ) {
     super(code);
     this.name = "CapacityV2InterpreterError";
     this.code = code;
     this.providerCode = providerCode;
     this.providerDiagnostics = providerDiagnostics;
+    this.semanticDiagnostics = semanticDiagnosticsValue;
   }
 }
 
@@ -171,7 +228,12 @@ export async function interpretCapacityMessageV2(
   try {
     return parseSemanticToolCall(call.name, call.arguments);
   } catch (error) {
-    throw new CapacityV2InterpreterError(parserErrorCode(error));
+    throw new CapacityV2InterpreterError(
+      parserErrorCode(error),
+      undefined,
+      undefined,
+      semanticDiagnostics(call, error),
+    );
   }
 }
 

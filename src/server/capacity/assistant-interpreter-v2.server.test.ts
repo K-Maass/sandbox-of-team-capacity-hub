@@ -398,6 +398,35 @@ describe("Luna V2 interpreter adapter", () => {
     });
     expect(parserError).not.toHaveProperty("cause");
     expect(JSON.stringify(parserError)).not.toContain("raw-secret");
+
+    const semanticError = await interpretCapacityMessageV2("hello", TODAY, {
+      runFunctionCall: async () =>
+        call({
+          type: "read",
+          action: {
+            kind: "getTeamOverview",
+            onDate: { kind: "date", date: TODAY },
+            consultant: { kind: "name", name: "raw-secret-consultant" },
+          },
+          presentation: "available_consultants",
+        }),
+    }).catch((error: unknown) => error);
+    expect(semanticError).toMatchObject({
+      code: "CAPACITY_V2_INVALID_SEMANTIC_OUTCOME",
+      semanticDiagnostics: {
+        toolName: "emit_capacity_read",
+        actionKind: "getTeamOverview",
+        parserError: "ZOD_VALIDATION",
+      },
+    });
+    expect(semanticError.semanticDiagnostics.issues.length).toBeGreaterThan(0);
+    expect(
+      semanticError.semanticDiagnostics.issues.every(
+        (issue: { path: string; code: string }) =>
+          typeof issue.path === "string" && typeof issue.code === "string",
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(semanticError)).not.toContain("raw-secret-consultant");
   });
 
   test("compiles through deterministic resolution and leaves data unchanged", async () => {
