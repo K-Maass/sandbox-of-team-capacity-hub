@@ -142,6 +142,7 @@ export const Route = createFileRoute("/api/ai/capacity")({
               code: error.code,
               providerCode: error.providerCode,
               providerDiagnostics: error.providerDiagnostics,
+              semanticDiagnostics: error.semanticDiagnostics,
             });
             const mapped =
               error.providerCode === "cancelled"
