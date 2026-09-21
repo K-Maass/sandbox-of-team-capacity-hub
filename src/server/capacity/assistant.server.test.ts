@@ -1263,7 +1263,7 @@ describe("Capacity assistant orchestration", () => {
       type: "write",
       action: {
         kind: "setAllocation",
-        consultant: { kind: "name", name: "Anna" },
+        consultant: { kind: "name", name: "Nobody Missing" },
         demand: { kind: "name", name: "Phoenix" },
         capacity: 50,
       },
