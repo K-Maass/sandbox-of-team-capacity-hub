@@ -1180,6 +1180,71 @@ describe("Capacity assistant orchestration", () => {
     expect(repository.applyCount).toBe(0);
   });
 
+  test("V2 user-correctable domain failures return normal typed assistant messages", async () => {
+    const missing = await handleCapacityAssistant(
+      { mode: "interpret", message: "How much capacity does Nobody have today?" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        useV2Writes: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "read",
+            action: {
+              kind: "getCapacity",
+              consultant: { kind: "name", name: "Nobody" },
+              onDate: { kind: "date", date: "2026-09-15" },
+              includePipeline: false,
+              focus: "free",
+            },
+          }),
+      },
+    );
+    expect(missing).toMatchObject({
+      ok: true,
+      kind: "domain_message",
+      code: "NOT_FOUND",
+    });
+    expect(missing.ok && missing.kind === "domain_message" ? missing.message : "").toContain(
+      "Consultant not found",
+    );
+
+    repository.data.consultants[0].linkedToUser = true;
+    repository.data.consultants[0].isCurrentUser = true;
+    repository.data.consultants[0].workingCapacity = 95;
+    const invalid = await handleCapacityAssistant(
+      { mode: "interpret", message: "Increase my capacity by 10%" },
+      repository,
+      ACTOR,
+      {
+        currentDate: "2026-09-15",
+        useV2Reads: true,
+        useV2Writes: true,
+        interpretV2: async () =>
+          semanticOutcomeSchema.parse({
+            type: "relativeWrite",
+            asOf: { kind: "date", date: "2026-09-15" },
+            operation: {
+              kind: "adjustConsultantCapacity",
+              consultant: { kind: "self" },
+              delta: 10,
+            },
+          }),
+      },
+    );
+    expect(invalid).toMatchObject({
+      ok: true,
+      kind: "domain_message",
+      code: "VALIDATION_ERROR",
+    });
+    expect(invalid.ok && invalid.kind === "domain_message" ? invalid.message : "").toContain(
+      "Working capacity must remain between 0% and 100%",
+    );
+    expect(repository.applyCount).toBe(0);
+  });
+
   test("V2 failures, writes, compound outcomes, and compile failures never call V1", async () => {
     let legacyCalls = 0;
     const base = {
