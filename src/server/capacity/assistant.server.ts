@@ -1304,6 +1304,54 @@ function clarificationFromFailure(
   };
 }
 
+const MISSING_REFERENCE_FIELDS = new Set([
+  "consultant",
+  "demand",
+  "owner",
+  "demand.owner",
+  "patch.owner",
+  "block",
+  "block.consultant",
+]);
+
+function missingWriteReferenceResponse(
+  error: CapacityActionFailure,
+  outcome: SemanticOutcome,
+  currentDate: string,
+  context?: ConversationContext,
+): AssistantResponse | null {
+  if (
+    error.detail.code !== "NOT_FOUND" ||
+    (outcome.type !== "write" && outcome.type !== "relativeWrite") ||
+    !error.detail.field ||
+    !MISSING_REFERENCE_FIELDS.has(error.detail.field)
+  )
+    return null;
+
+  let message: string;
+  if (error.detail.message.includes("authenticated account")) {
+    message =
+      "Your signed-in account is not linked to an active consultant profile, so I can't make that change. No change was made.";
+  } else if (error.detail.field === "block") {
+    message =
+      "I couldn't find that availability block in Capacity Hub. Check the dates and consultant, then try again. No change was made.";
+  } else if (error.detail.field.includes("demand") || error.detail.field === "demand") {
+    message =
+      "I couldn't find that demand in Capacity Hub. Check the demand name or create it first. No change was made.";
+  } else {
+    message =
+      "I couldn't find that consultant in Capacity Hub. Check the consultant name or create the profile first. No change was made.";
+  }
+
+  return {
+    ok: true,
+    kind: "semantic_clarification",
+    message,
+    currentDate,
+    context,
+  };
+}
+
 function withConsultantId(ref: unknown, candidateId: string) {
   void ref;
   return { consultantId: candidateId } as const;
@@ -2087,6 +2135,15 @@ async function handleV2Cutover(
         // Fall through to the safe cutover error if the clarification shape
         // cannot be constructed from the same authoritative snapshot.
       }
+    }
+    if (error instanceof CapacityActionFailure) {
+      const missingReference = missingWriteReferenceResponse(
+        error,
+        outcome,
+        currentDate,
+        validatedContext,
+      );
+      if (missingReference) return finish(missingReference);
     }
     const isWriteCutover =
       options.allowWrites === true &&
