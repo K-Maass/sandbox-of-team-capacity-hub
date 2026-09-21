@@ -375,13 +375,16 @@ const createConsultant = forty("create-consultant", (index) => {
   const combo = Math.floor(index / 5);
   const level = levels[combo % levels.length];
   const role = roles[(combo + index) % roles.length];
+  const skill = combo >= 5 ? SKILLS[(combo + index) % SKILLS.length] : undefined;
   return makeCase(
     "create-consultant",
     index,
-    `Add ${first} ${surname} as a ${level} in ${role}.`,
+    skill
+      ? `Add ${first} ${surname} as a ${level} in ${role} with ${skill} skills.`
+      : `Add ${first} ${surname} as a ${level} in ${role}.`,
     "WRITE",
     "create_consultant",
-    { name: first, surname, level, role },
+    { name: first, surname, level, role, ...(skill ? { skills: [skill] } : {}) },
   );
 });
 
